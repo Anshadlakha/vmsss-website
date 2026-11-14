@@ -140,3 +140,7 @@ select.mk{padding:6px 2px}
 .rc-sig .sg div{border-top:1px solid #12223f;padding-top:5px}
 .rc-note{margin-top:9px;text-align:center;font-size:9.8px;color:#5b6476}
 .mt select.gr{min-width:96px}.mt th:last-child{min-width:100px}
+.rc-t td.co{text-align:left;padding-left:8px;white-space:nowrap}.rc-t td.co .cg{display:inline-block;width:14px;color:#12223f}.rc-t td.co .cm{font-size:10.4px;color:#5b6476;margin-left:4px}
+.rc-cog{font-size:10.6px!important}.rc-cog b{color:#12223f}
+.rc-two{grid-template-columns:1.5fr 1fr!important;gap:14px!important}.rc-t td.co{padding-left:6px}.rc-t td.co .cm{font-size:9.8px;margin-left:3px}
+.rc-prom b{white-space:nowrap}
