@@ -1,0 +1,16 @@
+{
+  "name": "vmsss-website",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-09-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "html_handling": "auto-trailing-slash",
+    "run_worker_first": ["/api/*", "/admin", "/teacher"]
+  },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "vmsss-db", "database_id": "a97ca67d-d177-4eac-9a62-7940c19414d8" }
+  ],
+  "workers_dev": true,
+  "observability": { "enabled": true }
+}
