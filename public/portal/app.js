@@ -67,13 +67,17 @@
         if (!email) return toast($('#lm'), 'Enter your email');
         const btn = e.target.querySelector('button'); btn.disabled = true; btn.textContent = 'Sending…';
         try { const r = await api('/otp/request', { method: 'POST', body: { email } }); step2(r.dev_code); }
-        catch (er) { toast($('#lm'), er.message); btn.disabled = false; btn.textContent = 'Send login code'; }
+        catch (er) {
+          btn.disabled = false; btn.textContent = 'Send login code';
+          if (er.message === 'not_registered') $('#lm').innerHTML = `<div class="err"><b>This email is not registered on the portal.</b><br>Please contact the school admin to get access.<br>📞 <a href="tel:+919811197509">+91 98111 97509</a> · ✉️ <a href="mailto:contact@vivekmodelsrsecschool.in">contact@vivekmodelsrsecschool.in</a></div>`;
+          else toast($('#lm'), er.message);
+        }
       };
       $('#adm').onclick = e => { e.preventDefault(); pwLogin(); };
     };
     const step2 = dev => {
       app.innerHTML = `<div class="login"><form class="box" id="cf" novalidate>
-        <img src="/assets/img/logo-vmsss.png" alt=""><h1>Enter your code</h1><p class="c">If <b>${esc(email)}</b> is registered, we sent a 6-digit code to it from no-reply@vivekmodelsrsecschool.in. Check spam too.</p>
+        <img src="/assets/img/logo-vmsss.png" alt=""><h1>Enter your code</h1><p class="c">We sent a 6-digit code to <b>${esc(email)}</b> from no-reply@vivekmodelsrsecschool.in. Check spam too.</p>
         <div class="f"><label>6-digit code</label><input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" style="font-size:1.6rem;letter-spacing:.5em;text-align:center" value="${dev || ''}" required></div>
         <div id="lm"></div><button class="btn pri" style="width:100%">Log in</button>
         <p class="c" style="margin:14px 0 0"><a href="#" id="rs">Resend code</a> · <a href="#" id="ch">Use a different email</a></p></form></div>`;

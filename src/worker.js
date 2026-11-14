@@ -159,13 +159,13 @@ async function api(req, env, url) {
     const u = await db.prepare('SELECT id, name, active FROM users WHERE email = ?').bind(email).first();
     const now = Date.now();
     const o = await db.prepare('SELECT * FROM otps WHERE email = ?').bind(email).first();
-    if (o && now - o.last_sent < 60000) return err('Please wait a minute before asking for a new code.', 429);
+    if (o && now - o.last_sent < 60000) return err('Please wait a few seconds and try again.', 429);
     let win = o ? o.window_start : now, cnt = o ? o.sent_count : 0;
     if (now - win > 3600000) { win = now; cnt = 0; }
     if (cnt >= 5) return err('Too many codes requested. Please try again in an hour.', 429);
-    if (!u || !u.active) { // do not reveal whether the email exists
-      await db.prepare('INSERT OR REPLACE INTO otps (email, code_hash, expires, attempts, last_sent, window_start, sent_count) VALUES (?,?,?,?,?,?,?)').bind(email, '', 0, 0, now, win, cnt + 1).run();
-      return json({ ok: true });
+    if (!u || !u.active) { // not registered or removed
+      await db.prepare('INSERT OR REPLACE INTO otps (email, code_hash, expires, attempts, last_sent, window_start, sent_count) VALUES (?,?,?,?,?,?,?)').bind(email, '', 0, 0, now - 50000, win, cnt + 1).run();
+      return json({ error: 'not_registered' }, 404);
     }
     const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1000000).padStart(6, '0');
     const salt = 'otp:' + email;
