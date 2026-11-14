@@ -55,18 +55,50 @@
   }
 
   function loginView() {
-    app.innerHTML = `<div class="login"><form class="box" id="lf" novalidate>
-      <img src="/assets/img/logo-vmsss.png" alt=""><h1>School Portal</h1><p class="c">Vivek Model Sr. Sec. School · Teachers &amp; Admin</p>
-      <div class="f"><label>Email</label><input name="email" type="email" autocomplete="username" required></div>
-      <div class="f"><label>Password</label><input name="password" type="password" autocomplete="current-password" required></div>
-      <div id="lm"></div><button class="btn pri" style="width:100%">Log in</button>
-      <p class="c" style="margin:14px 0 0"><a href="/">← Back to website</a></p></form></div>`;
-    $('#lf').onsubmit = async e => {
-      e.preventDefault(); const f = e.target;
-      if (!f.email.value || !f.password.value) return toast($('#lm'), 'Enter your email and password');
-      try { await api('/login', { method: 'POST', body: { email: f.email.value, password: f.password.value } }); boot(); }
-      catch (er) { toast($('#lm'), er.message); }
+    let email = '';
+    const step1 = () => {
+      app.innerHTML = `<div class="login"><form class="box" id="lf" novalidate>
+        <img src="/assets/img/logo-vmsss.png" alt=""><h1>School Portal</h1><p class="c">Vivek Model Sr. Sec. School · Teachers &amp; Admin</p>
+        <div class="f"><label>Your school email</label><input name="email" type="email" autocomplete="email" value="${esc(email)}" required></div>
+        <div id="lm"></div><button class="btn pri" style="width:100%">Send login code</button>
+        <p class="c" style="margin:14px 0 0"><a href="#" id="adm">Admin: log in with password</a> · <a href="/">Website</a></p></form></div>`;
+      $('#lf').onsubmit = async e => {
+        e.preventDefault(); email = e.target.email.value.trim();
+        if (!email) return toast($('#lm'), 'Enter your email');
+        const btn = e.target.querySelector('button'); btn.disabled = true; btn.textContent = 'Sending…';
+        try { const r = await api('/otp/request', { method: 'POST', body: { email } }); step2(r.dev_code); }
+        catch (er) { toast($('#lm'), er.message); btn.disabled = false; btn.textContent = 'Send login code'; }
+      };
+      $('#adm').onclick = e => { e.preventDefault(); pwLogin(); };
     };
+    const step2 = dev => {
+      app.innerHTML = `<div class="login"><form class="box" id="cf" novalidate>
+        <img src="/assets/img/logo-vmsss.png" alt=""><h1>Enter your code</h1><p class="c">If <b>${esc(email)}</b> is registered, we sent a 6-digit code to it from no-reply@vivekmodelsrsecschool.in. Check spam too.</p>
+        <div class="f"><label>6-digit code</label><input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" style="font-size:1.6rem;letter-spacing:.5em;text-align:center" value="${dev || ''}" required></div>
+        <div id="lm"></div><button class="btn pri" style="width:100%">Log in</button>
+        <p class="c" style="margin:14px 0 0"><a href="#" id="rs">Resend code</a> · <a href="#" id="ch">Use a different email</a></p></form></div>`;
+      $('#cf').code.focus();
+      $('#cf').onsubmit = async e => {
+        e.preventDefault(); const code = e.target.code.value.trim();
+        if (!/^\d{6}$/.test(code)) return toast($('#lm'), 'Enter the 6-digit code from your email');
+        try { await api('/otp/verify', { method: 'POST', body: { email, code } }); boot(); } catch (er) { toast($('#lm'), er.message); }
+      };
+      $('#rs').onclick = async e => { e.preventDefault(); try { const r = await api('/otp/request', { method: 'POST', body: { email } }); if (r.dev_code) $('#cf').code.value = r.dev_code; toast($('#lm'), 'A new code has been sent.', true); } catch (er) { toast($('#lm'), er.message); } };
+      $('#ch').onclick = e => { e.preventDefault(); step1(); };
+    };
+    const pwLogin = () => {
+      app.innerHTML = `<div class="login"><form class="box" id="pf" novalidate>
+        <img src="/assets/img/logo-vmsss.png" alt=""><h1>Admin login</h1><p class="c">Backup login with password (admins only)</p>
+        <div class="f"><label>Email</label><input name="email" type="email" autocomplete="username" value="${esc(email)}"></div>
+        <div class="f"><label>Password</label><input name="password" type="password" autocomplete="current-password"></div>
+        <div id="lm"></div><button class="btn pri" style="width:100%">Log in</button><p class="c" style="margin:14px 0 0"><a href="#" id="bk2">← Log in with email code</a></p></form></div>`;
+      $('#pf').onsubmit = async e => {
+        e.preventDefault(); const f = e.target;
+        try { await api('/login', { method: 'POST', body: { email: f.email.value, password: f.password.value } }); boot(); } catch (er) { toast($('#lm'), er.message); }
+      };
+      $('#bk2').onclick = e => { e.preventDefault(); step1(); };
+    };
+    step1();
   }
   function setupView() {
     app.innerHTML = `<div class="login"><form class="box" id="sf" novalidate>
@@ -101,13 +133,8 @@
       ${!clsOf(me.class_name) ? '<div class="err">Your class is not set up yet. Please ask the admin to assign your class.</div>' : ''}
       <div class="panel"><div class="row" style="justify-content:space-between;margin-bottom:12px"><h3 style="margin:0">My report cards</h3>
       <div class="row"><input id="tq" class="mk" style="width:200px;text-align:left" placeholder="Search student…"><button class="btn gold" id="newc" ${clsOf(me.class_name) ? '' : 'disabled'}>+ New report card</button></div></div>
-      <div class="tw" id="tl"><div class="empty">Loading…</div></div></div>
-      <div class="panel"><h3>Change my password</h3><form id="pw" class="grid" novalidate>
-      <div class="f"><label>Current password</label><input name="current" type="password" autocomplete="current-password"></div>
-      <div class="f"><label>New password (min 8)</label><input name="password" type="password" autocomplete="new-password"></div>
-      <div class="f" style="align-self:end"><button class="btn pri">Update password</button></div></form><div id="pwm"></div></div>`;
+      <div class="tw" id="tl"><div class="empty">Loading…</div></div></div>`;
     $('#newc').onclick = () => editor(null);
-    passwordForm();
     const load = async () => {
       const q = $('#tq').value.trim();
       const rows = await api('/cards' + (q ? '?q=' + encodeURIComponent(q) : ''));
@@ -391,8 +418,7 @@
     const m = modal(`<div class="mh"><h2>${isNew ? 'Add teacher' : 'Edit teacher'}</h2><button class="btn" id="tcl">Close</button></div>
       <form id="tf" novalidate><div class="grid">
       <div class="f"><label>Full name *</label><input name="name" value="${esc(t.name || '')}"></div>
-      <div class="f"><label>Login email *</label><input name="email" type="email" value="${esc(t.email || '')}"></div>
-      <div class="f"><label>${isNew ? 'Password * (min 8)' : 'New password (leave blank to keep)'}</label><input name="password" type="text" autocomplete="new-password"></div>
+      <div class="f"><label>Login email *</label><input name="email" type="email" value="${esc(t.email || '')}"><div class="hint">The teacher logs in with a code sent to this email.</div></div>
       <div class="f"><label>Phone</label><input name="phone" type="tel" value="${esc(t.phone || '')}"></div>
       <div class="f"><label>Class *</label><select name="class_name"><option value="">– Select –</option>${S.classes.map(c => `<option ${c.name === t.class_name ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div>
       <div class="f"><label>Section</label><input name="section" value="${esc(t.section || '')}" placeholder="A"></div>
@@ -409,7 +435,7 @@
     $('#tf', m).onsubmit = async e => {
       e.preventDefault(); const f = e.target;
       if (!f.class_name.value) return toast($('#tm', m), 'Please choose the class for this teacher.');
-      const body = { name: f.name.value, email: f.email.value, password: f.password.value, phone: f.phone.value, class_name: f.class_name.value, section: f.section.value, designation: f.designation.value, photo, signature };
+      const body = { name: f.name.value, email: f.email.value, phone: f.phone.value, class_name: f.class_name.value, section: f.section.value, designation: f.designation.value, photo, signature };
       if (!isNew) body.active = f.active.value === '1';
       try { await api(isNew ? '/teachers' : '/teachers/' + t.id, { method: isNew ? 'POST' : 'PUT', body }); closeModal(); adminHome(); }
       catch (er) { toast($('#tm', m), er.message); }

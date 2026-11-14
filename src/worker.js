@@ -24,6 +24,7 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS classes (name TEXT PRIMARY KEY, subjects TEXT NOT NULL, co TEXT NOT NULL, sort INTEGER DEFAULT 0)`,
   `CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`,
   `CREATE TABLE IF NOT EXISTS cards (id INTEGER PRIMARY KEY AUTOINCREMENT, teacher_id INTEGER, class_name TEXT, section TEXT, student_name TEXT, admission_no TEXT, dob TEXT, father TEXT, mother TEXT, mobile TEXT, roll_no TEXT, attendance TEXT, data TEXT, status TEXT DEFAULT 'draft', session TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')))`,
+  `CREATE TABLE IF NOT EXISTS otps (email TEXT PRIMARY KEY, code_hash TEXT, expires INTEGER, attempts INTEGER DEFAULT 0, last_sent INTEGER DEFAULT 0, window_start INTEGER DEFAULT 0, sent_count INTEGER DEFAULT 0)`,
   `CREATE INDEX IF NOT EXISTS idx_cards_teacher ON cards(teacher_id)`,
   `CREATE INDEX IF NOT EXISTS idx_cards_class ON cards(class_name)`,
 ];
@@ -94,6 +95,23 @@ function cardFields(b) {
   };
 }
 
+
+async function sendOtpEmail(env, to, name, code) {
+  if (!env.RESEND_API_KEY) throw new Error('email service is not set up yet (RESEND_API_KEY missing)');
+  const from = env.MAIL_FROM || 'Vivek Model Sr. Sec. School <no-reply@vivekmodelsrsecschool.in>';
+  const html = `<div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:24px;border:1px solid #e3ddcf;border-radius:12px">
+    <div style="text-align:center"><img src="https://vivekmodelsrsecschool.in/assets/img/icon-192.png" width="64" height="64" alt="">
+    <h2 style="color:#12223f;margin:8px 0 4px">Vivek Model Sr. Sec. School</h2><p style="color:#5b6476;margin:0 0 18px">School Portal login</p></div>
+    <p style="color:#1d2433">Hello ${String(name).replace(/[<>&]/g, '')},</p><p style="color:#1d2433">Your login code is:</p>
+    <p style="font-size:32px;letter-spacing:8px;font-weight:bold;color:#12223f;text-align:center;background:#fbf7ee;border-radius:10px;padding:14px;margin:10px 0">${code}</p>
+    <p style="color:#5b6476;font-size:13px">This code expires in 10 minutes. If you did not try to log in, you can ignore this email.</p></div>`;
+  const r = await fetch('https://api.resend.com/emails', {
+    method: 'POST', headers: { authorization: 'Bearer ' + env.RESEND_API_KEY, 'content-type': 'application/json' },
+    body: JSON.stringify({ from, to: [to], subject: `${code} is your Vivek Model School Portal login code`, html, text: `Your Vivek Model School Portal login code is ${code}. It expires in 10 minutes.` }),
+  });
+  if (!r.ok) throw new Error('email provider error ' + r.status);
+}
+
 // ---------- API ----------
 async function api(req, env, url) {
   const db = env.DB;
@@ -124,11 +142,53 @@ async function api(req, env, url) {
   if (p === '/login' && m === 'POST') {
     const b = await readBody(req);
     const email = clean(b.email, 120).toLowerCase();
-    const u = await db.prepare('SELECT id, pass_hash, salt, active FROM users WHERE email = ?').bind(email).first();
+    const u = await db.prepare('SELECT id, role, pass_hash, salt, active FROM users WHERE email = ?').bind(email).first();
     const h = u ? await hashPassword(String(b.password || ''), u.salt) : await hashPassword('x', 'y');
     if (!u || !u.active || !safeEqual(h, u.pass_hash)) return err('Wrong email or password', 401);
+    if (u.role !== 'admin') return err('Teachers log in with the email code', 401);
     const token = randHex(32);
     await db.prepare('DELETE FROM sessions WHERE expires < ?').bind(Date.now()).run();
+    await db.prepare('INSERT INTO sessions (token, user_id, expires) VALUES (?,?,?)').bind(token, u.id, Date.now() + SESSION_DAYS * 864e5).run();
+    return json({ ok: true }, 200, { 'set-cookie': cookieFor(token, SESSION_DAYS * 86400) });
+  }
+
+  if (p === '/otp/request' && m === 'POST') {
+    const b = await readBody(req);
+    const email = clean(b.email, 120).toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err('Enter a valid email');
+    const u = await db.prepare('SELECT id, name, active FROM users WHERE email = ?').bind(email).first();
+    const now = Date.now();
+    const o = await db.prepare('SELECT * FROM otps WHERE email = ?').bind(email).first();
+    if (o && now - o.last_sent < 60000) return err('Please wait a minute before asking for a new code.', 429);
+    let win = o ? o.window_start : now, cnt = o ? o.sent_count : 0;
+    if (now - win > 3600000) { win = now; cnt = 0; }
+    if (cnt >= 5) return err('Too many codes requested. Please try again in an hour.', 429);
+    if (!u || !u.active) { // do not reveal whether the email exists
+      await db.prepare('INSERT OR REPLACE INTO otps (email, code_hash, expires, attempts, last_sent, window_start, sent_count) VALUES (?,?,?,?,?,?,?)').bind(email, '', 0, 0, now, win, cnt + 1).run();
+      return json({ ok: true });
+    }
+    const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1000000).padStart(6, '0');
+    const salt = 'otp:' + email;
+    await db.prepare('INSERT OR REPLACE INTO otps (email, code_hash, expires, attempts, last_sent, window_start, sent_count) VALUES (?,?,?,?,?,?,?)').bind(email, await hashPassword(code, salt), now + 600000, 0, now, win, cnt + 1).run();
+    if (env.DEV_SHOW_OTP === '1') return json({ ok: true, dev_code: code });
+    try { await sendOtpEmail(env, email, u.name, code); }
+    catch (e) { return err('Could not send the email: ' + e.message, 502); }
+    return json({ ok: true });
+  }
+  if (p === '/otp/verify' && m === 'POST') {
+    const b = await readBody(req);
+    const email = clean(b.email, 120).toLowerCase(), code = String(b.code || '').replace(/\D/g, '');
+    const o = await db.prepare('SELECT * FROM otps WHERE email = ?').bind(email).first();
+    if (!o || !o.code_hash || o.expires < Date.now()) return err('Code expired. Please request a new one.', 401);
+    if (o.attempts >= 5) return err('Too many wrong tries. Please request a new code.', 401);
+    if (!safeEqual(await hashPassword(code, 'otp:' + email), o.code_hash)) {
+      await db.prepare('UPDATE otps SET attempts = attempts + 1 WHERE email = ?').bind(email).run();
+      return err('Wrong code. Please check your email and try again.', 401);
+    }
+    const u = await db.prepare('SELECT id, active FROM users WHERE email = ?').bind(email).first();
+    if (!u || !u.active) return err('This account is not active', 401);
+    await db.prepare("UPDATE otps SET code_hash = '', expires = 0 WHERE email = ?").bind(email).run();
+    const token = randHex(32);
     await db.prepare('INSERT INTO sessions (token, user_id, expires) VALUES (?,?,?)').bind(token, u.id, Date.now() + SESSION_DAYS * 864e5).run();
     return json({ ok: true }, 200, { 'set-cookie': cookieFor(token, SESSION_DAYS * 86400) });
   }
@@ -170,13 +230,12 @@ async function api(req, env, url) {
     const b = await readBody(req);
     const email = clean(b.email, 120).toLowerCase(), name = clean(b.name, 120), pw = String(b.password || '');
     if (!name || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err('Enter teacher name and a valid login email');
-    if (pw.length < 8) return err('Password must be at least 8 characters');
     if (!isImage(b.photo) || !isImage(b.signature)) return err('Photo/signature must be an image under 400 KB');
     const ex = await db.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
     if (ex) return err('This email is already used');
     const salt = randHex(16);
     await db.prepare("INSERT INTO users (role, name, email, pass_hash, salt, phone, class_name, section, designation, photo, signature) VALUES ('teacher',?,?,?,?,?,?,?,?,?,?)")
-      .bind(name, email, await hashPassword(pw, salt), salt, clean(b.phone, 20), clean(b.class_name, 40), clean(b.section, 10), clean(b.designation, 80), b.photo || '', b.signature || '').run();
+      .bind(name, email, await hashPassword(pw || randHex(24), salt), salt, clean(b.phone, 20), clean(b.class_name, 40), clean(b.section, 10), clean(b.designation, 80), b.photo || '', b.signature || '').run();
     return json({ ok: true });
   }
   let mt = p.match(/^\/teachers\/(\d+)$/);
@@ -191,8 +250,8 @@ async function api(req, env, url) {
       if (ex) return err('This email is already used');
       await db.prepare("UPDATE users SET name=?, email=?, phone=?, class_name=?, section=?, designation=?, photo=?, signature=?, active=? WHERE id=? AND role='teacher'")
         .bind(clean(b.name, 120), email, clean(b.phone, 20), clean(b.class_name, 40), clean(b.section, 10), clean(b.designation, 80), b.photo || '', b.signature || '', b.active === false ? 0 : 1, id).run();
-      if (b.password) {
-        if (String(b.password).length < 8) return err('Password must be at least 8 characters');
+      if (b.logout_all) await db.prepare('DELETE FROM sessions WHERE user_id=?').bind(id).run();
+      if (false) {
         const salt = randHex(16);
         await db.prepare('UPDATE users SET pass_hash=?, salt=? WHERE id=?').bind(await hashPassword(b.password, salt), salt, id).run();
         await db.prepare('DELETE FROM sessions WHERE user_id=?').bind(id).run();
