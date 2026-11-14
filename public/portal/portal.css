@@ -144,3 +144,24 @@ select.mk{padding:6px 2px}
 .rc-cog{font-size:10.6px!important}.rc-cog b{color:#12223f}
 .rc-two{grid-template-columns:1.5fr 1fr!important;gap:14px!important}.rc-t td.co{padding-left:6px}.rc-t td.co .cm{font-size:9.8px;margin-left:3px}
 .rc-prom b{white-space:nowrap}
+
+/* teacher profile card */
+.prof{display:flex;gap:24px;align-items:center;background:linear-gradient(135deg,#0b172d,#1c3260);color:#fff;border-radius:20px;padding:24px;margin-bottom:18px;box-shadow:0 14px 34px rgba(18,34,63,.18)}
+.prof-ph{width:150px;height:150px;border-radius:50%;padding:5px;background:linear-gradient(135deg,var(--gold2),var(--gold));flex:none}
+.prof-ph img,.prof-ph span{width:100%;height:100%;border-radius:50%;object-fit:cover;display:grid;place-items:center;background:#fff;color:var(--navy);font-family:'Playfair Display',serif;font-size:3rem}
+.prof-in{min-width:0;flex:1}
+.prof-tag{display:inline-block;font-size:.72rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--navy2);background:var(--gold2);padding:3px 10px;border-radius:999px}
+.prof h1{font-family:'Playfair Display',serif;font-size:2rem;line-height:1.15;margin:8px 0 4px;color:#fff}
+.prof-cls{color:#d5dcea;font-size:.92rem}.prof-cls b{color:var(--gold2)}
+.prof-ct{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:10px;font-size:.92rem}
+.prof-ct a,.prof-ct span{color:#fff;text-decoration:none;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);padding:5px 12px;border-radius:999px;overflow-wrap:anywhere}
+.prof-sig{margin-top:12px;display:inline-flex;align-items:center;gap:10px;background:#fff;border-radius:10px;padding:6px 12px}
+.prof-sig img{height:38px;max-width:150px;object-fit:contain}
+.prof-sig small{color:var(--muted);font-size:.72rem}
+.prof-sig.none{background:rgba(255,255,255,.08)}.prof-sig.none small{color:#d5dcea}
+@media (max-width:640px){.prof{flex-direction:column;text-align:center;padding:20px}.prof-ph{width:130px;height:130px}.prof h1{font-size:1.5rem}.prof-ct{justify-content:center}}
+.prof-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px}
+.prof-grid div{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);border-radius:12px;padding:8px 12px;min-width:0}
+.prof-grid small{display:block;font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;color:var(--gold2)}
+.prof-grid b{display:block;font-weight:600;color:#fff;overflow-wrap:anywhere}.prof-grid a{color:#fff;text-decoration:none}
+@media (max-width:640px){.prof-grid{grid-template-columns:1fr 1fr;text-align:left}}

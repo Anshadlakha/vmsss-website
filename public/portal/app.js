@@ -132,8 +132,21 @@
   // ---------------- teacher ----------------
   async function teacherHome() {
     const me = S.me;
-    main().innerHTML = `<h1 class="pg">Welcome, ${esc(me.name.split(' ')[0])}</h1>
-      <p class="sub">Class <b>${esc(me.class_name || 'not assigned')}${me.section ? ' – ' + esc(me.section) : ''}</b> · Session ${esc(S.settings.session)}</p>
+    main().innerHTML = `<div class="prof">
+        <div class="prof-ph">${me.photo ? `<img src="${esc(me.photo)}" alt="${esc(me.name)}">` : `<span>${esc(initials(me.name))}</span>`}</div>
+        <div class="prof-in">
+          <span class="prof-tag">Class Teacher</span>
+          <h1>${esc(me.name)}</h1>
+          <div class="prof-grid">
+            <div><small>Class</small><b>${esc(me.class_name || 'Not assigned')}</b></div>
+            <div><small>Section</small><b>${esc(me.section || '–')}</b></div>
+            <div><small>Designation</small><b>${esc(me.designation || 'Teacher')}</b></div>
+            <div><small>Session</small><b>${esc(S.settings.session || '')}</b></div>
+            <div><small>Phone</small><b>${me.phone ? `<a href="tel:${esc(me.phone)}">${esc(me.phone)}</a>` : '–'}</b></div>
+            <div><small>Email</small><b>${esc(me.email)}</b></div>
+          </div>
+          ${me.signature ? `<div class="prof-sig"><img src="${esc(me.signature)}" alt="Signature"><small>Signature</small></div>` : '<div class="prof-sig none"><small>No signature added – ask the admin to upload it.</small></div>'}
+        </div></div>
       ${!clsOf(me.class_name) ? '<div class="err">Your class is not set up yet. Please ask the admin to assign your class.</div>' : ''}
       <div class="panel"><div class="row" style="justify-content:space-between;margin-bottom:12px"><h3 style="margin:0">My report cards</h3>
       <div class="row"><input id="tq" class="mk" style="width:200px;text-align:left" placeholder="Search student…"><button class="btn gold" id="newc" ${clsOf(me.class_name) ? '' : 'disabled'}>+ New report card</button></div></div>
