@@ -1,5 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://vivekmodelsrsecschool.in/</loc><lastmod>2026-11-14</lastmod><changefreq>weekly</changefreq><priority>1.0</priority></url>
-  <url><loc>https://vivekmodelsrsecschool.in/leadership.html</loc><lastmod>2026-11-14</lastmod><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://vivekmodelsrsecschool.in/</loc><lastmod>2026-11-14</lastmod><priority>1.0</priority></url>
+  <url><loc>https://vivekmodelsrsecschool.in/about.html</loc><lastmod>2026-11-14</lastmod><priority>0.8</priority></url>
+  <url><loc>https://vivekmodelsrsecschool.in/leadership.html</loc><lastmod>2026-11-14</lastmod><priority>0.8</priority></url>
+  <url><loc>https://vivekmodelsrsecschool.in/founder.html</loc><lastmod>2026-11-14</lastmod><priority>0.8</priority></url>
+  <url><loc>https://vivekmodelsrsecschool.in/chairman.html</loc><lastmod>2026-11-14</lastmod><priority>0.8</priority></url>
+  <url><loc>https://vivekmodelsrsecschool.in/principal.html</loc><lastmod>2026-11-14</lastmod><priority>0.8</priority></url>
+  <url><loc>https://vivekmodelsrsecschool.in/general-manager.html</loc><lastmod>2026-11-14</lastmod><priority>0.8</priority></url>
+  <url><loc>https://vivekmodelsrsecschool.in/branches.html</loc><lastmod>2026-11-14</lastmod><priority>0.8</priority></url>
+  <url><loc>https://vivekmodelsrsecschool.in/maruti-kunj.html</loc><lastmod>2026-11-14</lastmod><priority>0.8</priority></url>
+  <url><loc>https://vivekmodelsrsecschool.in/sohna.html</loc><lastmod>2026-11-14</lastmod><priority>0.8</priority></url>
+  <url><loc>https://vivekmodelsrsecschool.in/academics.html</loc><lastmod>2026-11-14</lastmod><priority>0.8</priority></url>
+  <url><loc>https://vivekmodelsrsecschool.in/facilities.html</loc><lastmod>2026-11-14</lastmod><priority>0.8</priority></url>
+  <url><loc>https://vivekmodelsrsecschool.in/gallery.html</loc><lastmod>2026-11-14</lastmod><priority>0.8</priority></url>
+  <url><loc>https://vivekmodelsrsecschool.in/admissions.html</loc><lastmod>2026-11-14</lastmod><priority>0.8</priority></url>
+  <url><loc>https://vivekmodelsrsecschool.in/contact.html</loc><lastmod>2026-11-14</lastmod><priority>0.8</priority></url>
 </urlset>
