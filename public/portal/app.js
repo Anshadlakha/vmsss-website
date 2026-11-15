@@ -13,6 +13,7 @@
     if (!r.ok) { const e = new Error(d.error || ('Error ' + r.status)); e.status = r.status; throw e; }
     return d;
   }
+  const isAdminRole = r => r === 'owner' || r === 'admin';
   const clsOf = name => S.classes.find(c => c.name === name);
   const initials = n => (n || '?').split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();
   const avatar = (u, cls = '') => u.photo ? `<img src="${esc(u.photo)}" alt="" class="${cls}">` : `<span class="av">${esc(initials(u.name))}</span>`;
@@ -45,7 +46,7 @@
       const b = await api('/bootstrap');
       Object.assign(S, b);
       shell();
-      S.me.role === 'admin' ? adminHome() : teacherHome();
+      isAdminRole(S.me.role) ? adminHome() : teacherHome();
     } catch (e) {
       if (e.status === 401) {
         try { const st = await api('/setup-status'); st.needsSetup ? setupView() : loginView(); }
@@ -58,10 +59,11 @@
     let email = '';
     const step1 = () => {
       app.innerHTML = `<div class="login"><form class="box" id="lf" novalidate>
-        <img src="/assets/img/logo-vmsss.png" alt=""><h1>School Portal</h1><p class="c">Vivek Model Sr. Sec. School · Teachers &amp; Admin</p>
+        <img src="/assets/img/logo-vmsss.png" alt=""><h1>School Portal</h1><p class="c">Vivek Model Sr. Sec. School</p>
+        <div class="seg"><button type="button" class="on">Teacher</button><button type="button" id="adm">Admin</button></div>
         <div class="f"><label>Your school email</label><input name="email" type="email" autocomplete="email" value="${esc(email)}" required></div>
         <div id="lm"></div><button class="btn pri" style="width:100%">Send login code</button>
-        <p class="c" style="margin:14px 0 0"><a href="#" id="adm">Admin: log in with password</a> · <a href="/">Website</a></p></form></div>`;
+        <p class="c" style="margin:14px 0 0"><a href="/">← Back to website</a></p></form></div>`;
       $('#lf').onsubmit = async e => {
         e.preventDefault(); email = e.target.email.value.trim();
         if (!email) return toast($('#lm'), 'Enter your email');
@@ -73,7 +75,7 @@
           else toast($('#lm'), er.message);
         }
       };
-      $('#adm').onclick = e => { e.preventDefault(); pwLogin(); };
+      $('#adm').onclick = () => pwLogin();
     };
     const step2 = dev => {
       app.innerHTML = `<div class="login"><form class="box" id="cf" novalidate>
@@ -92,29 +94,34 @@
     };
     const pwLogin = () => {
       app.innerHTML = `<div class="login"><form class="box" id="pf" novalidate>
-        <img src="/assets/img/logo-vmsss.png" alt=""><h1>Admin login</h1><p class="c">Backup login with password (admins only)</p>
-        <div class="f"><label>Email</label><input name="email" type="email" autocomplete="username" value="${esc(email)}"></div>
+        <img src="/assets/img/logo-vmsss.png" alt=""><h1>School Portal</h1><p class="c">Vivek Model Sr. Sec. School</p>
+        <div class="seg"><button type="button" id="bk2">Teacher</button><button type="button" class="on">Admin</button></div>
+        <div class="f"><label>Username</label><input name="username" autocomplete="username" autocapitalize="none" spellcheck="false"></div>
         <div class="f"><label>Password</label><input name="password" type="password" autocomplete="current-password"></div>
-        <div id="lm"></div><button class="btn pri" style="width:100%">Log in</button><p class="c" style="margin:14px 0 0"><a href="#" id="bk2">← Log in with email code</a></p></form></div>`;
+        <div id="lm"></div><button class="btn pri" style="width:100%">Log in</button>
+        <p class="c" style="margin:14px 0 0">Forgot your password? Ask the main admin.</p></form></div>`;
+      $('#pf').username.focus();
       $('#pf').onsubmit = async e => {
         e.preventDefault(); const f = e.target;
-        try { await api('/login', { method: 'POST', body: { email: f.email.value, password: f.password.value } }); boot(); } catch (er) { toast($('#lm'), er.message); }
+        try { await api('/login', { method: 'POST', body: { username: f.username.value.trim(), password: f.password.value } }); boot(); } catch (er) { toast($('#lm'), er.message); }
       };
-      $('#bk2').onclick = e => { e.preventDefault(); step1(); };
+      $('#bk2').onclick = () => step1();
     };
     step1();
   }
   function setupView() {
     app.innerHTML = `<div class="login"><form class="box" id="sf" novalidate>
-      <img src="/assets/img/logo-vmsss.png" alt=""><h1>Create admin account</h1><p class="c">First-time setup. This can only be done once.</p>
+      <img src="/assets/img/logo-vmsss.png" alt=""><h1>Create the main admin</h1><p class="c">First-time setup. This can only be done once. The main admin can add other admins later.</p>
       <div class="f"><label>Your name</label><input name="name" required></div>
-      <div class="f"><label>Email (login)</label><input name="email" type="email" required></div>
+      <div class="f"><label>Username</label><input name="username" autocapitalize="none" spellcheck="false" placeholder="e.g. ansh" required><div class="hint">Small letters or numbers, no spaces.</div></div>
       <div class="f"><label>Password (min 8 characters)</label><input name="password" type="password" autocomplete="new-password" required></div>
-      <div id="sm"></div><button class="btn gold" style="width:100%">Create admin</button></form></div>`;
+      <div class="f"><label>Type the password again</label><input name="password2" type="password" autocomplete="new-password" required></div>
+      <div id="sm"></div><button class="btn gold" style="width:100%">Create main admin</button></form></div>`;
     $('#sf').onsubmit = async e => {
       e.preventDefault(); const f = e.target;
-      try { await api('/setup', { method: 'POST', body: { name: f.name.value, email: f.email.value, password: f.password.value } });
-        await api('/login', { method: 'POST', body: { email: f.email.value, password: f.password.value } }); boot(); }
+      if (f.password.value !== f.password2.value) return toast($('#sm'), 'The two passwords do not match.');
+      const body = { name: f.name.value, username: f.username.value.trim().toLowerCase(), password: f.password.value };
+      try { await api('/setup', { method: 'POST', body }); await api('/login', { method: 'POST', body }); boot(); }
       catch (er) { toast($('#sm'), er.message); }
     };
   }
@@ -122,7 +129,7 @@
   function shell() {
     const me = S.me;
     app.innerHTML = `<header class="top"><div class="in">
-      <img class="logo" src="/assets/img/logo-vmsss.png" alt=""><div class="brand">Vivek Model Sr. Sec. School<small>${me.role === 'admin' ? 'ADMIN PANEL' : 'TEACHER PANEL'}</small></div>
+      <img class="logo" src="/assets/img/logo-vmsss.png" alt=""><div class="brand">Vivek Model Sr. Sec. School<small>${me.role === 'owner' ? 'MAIN ADMIN' : me.role === 'admin' ? 'ADMIN PANEL' : 'TEACHER PANEL'}</small></div>
       <div class="sp"></div><div class="who">${avatar(me)}<span>${esc(me.name)}</span></div>
       <button class="btn ghost sm" id="lo">Log out</button></div></header><main class="wrap" id="main"></main>`;
     $('#lo').onclick = async () => { await api('/logout', { method: 'POST' }).catch(() => {}); location.reload(); };
@@ -191,7 +198,7 @@
 
   // ---------------- report card editor (teacher + admin) ----------------
   async function editor(id, back) {
-    const isAdmin = S.me.role === 'admin';
+    const isAdmin = isAdminRole(S.me.role);
     back = back || (isAdmin ? adminHome : teacherHome);
     let card;
     if (id) card = await api('/cards/' + id);
@@ -401,8 +408,9 @@
   let adminTab = 'cards';
   async function adminHome() {
     S.teachers = await api('/teachers');
+    if (adminTab === 'admins' && S.me.role !== 'owner') adminTab = 'cards';
     main().innerHTML = `<h1 class="pg">Admin panel</h1><p class="sub">Session ${esc(S.settings.session)} · ${S.teachers.length} teacher(s)</p>
-      <div class="tabs">${[['cards', 'Report cards'], ['teachers', 'Teachers'], ['classes', 'Classes & report card format'], ['admins', 'Admins'], ['settings', 'Settings']].map(([k, l]) => `<button class="tab ${adminTab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div><div id="tabc"></div>`;
+      <div class="tabs">${[['cards', 'Report cards'], ['teachers', 'Teachers'], ['classes', 'Classes & report card format'], ...(S.me.role === 'owner' ? [['admins', 'Admins']] : []), ['settings', 'Settings']].map(([k, l]) => `<button class="tab ${adminTab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div><div id="tabc"></div>`;
     $$('[data-tab]').forEach(b => b.onclick = () => { adminTab = b.dataset.tab; adminHome(); });
     ({ cards: adminCards, teachers: adminTeachers, classes: adminClasses, admins: adminAdmins, settings: adminSettings })[adminTab]();
   }
@@ -541,30 +549,40 @@
   async function adminAdmins() {
     const list = await api('/admins');
     $('#tabc').innerHTML = `<div class="panel"><div class="row" style="justify-content:space-between;margin-bottom:6px"><h3 style="margin:0">Admins</h3><button class="btn gold" id="adda">+ Add admin</button></div>
-      <p class="sub">Every admin has full access: report cards, teachers, classes, formats and settings. New admins log in on this page with a code sent to their email.</p>
-      <div class="tw"><table class="lt"><thead><tr><th>Admin</th><th>Login email</th><th>Phone</th><th>Status</th><th></th></tr></thead><tbody>${list.map(a => `<tr>
-      <td><b>${esc(a.name)}</b>${a.me ? ' <small style="color:var(--muted)">(you)</small>' : ''}<br><small style="color:var(--muted)">${esc(a.designation || '')}</small></td>
-      <td>${esc(a.email)}</td><td>${esc(a.phone || '')}</td><td>${a.active ? '<span class="st approved">Active</span>' : '<span class="st draft">Disabled</span>'}</td>
-      <td><div class="row" style="justify-content:flex-end;flex-wrap:nowrap">${a.me ? '' : `<button class="btn sm" data-ta="${a.id}">${a.active ? 'Disable' : 'Enable'}</button><button class="btn sm danger" data-da="${a.id}">Remove</button>`}</div></td></tr>`).join('')}</tbody></table></div><div id="am"></div></div>`;
-    $('#adda').onclick = () => {
-      const m = modal(`<div class="mh"><h2>Add admin</h2><button class="btn" id="acl">Close</button></div><form id="af" novalidate><div class="grid">
-        <div class="f"><label>Full name *</label><input name="name"></div>
-        <div class="f"><label>Login email *</label><input name="email" type="email"><div class="hint">They log in with a code sent to this email.</div></div>
-        <div class="f"><label>Phone</label><input name="phone" type="tel"></div>
-        <div class="f"><label>Designation</label><input name="designation" placeholder="Principal / Office Admin"></div>
-        <div class="f"><label>Backup password (optional, min 8)</label><input name="password" type="password" autocomplete="new-password"><div class="hint">Only needed if email codes ever stop working.</div></div>
-        </div><div id="afm"></div><div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn pri">Add admin</button></div></form>`);
+      <p class="sub">Only you (the main admin) can see this page. Admins log in with their username and password and can manage report cards, teachers, classes and settings, but not other admins.</p>
+      <div class="tw"><table class="lt"><thead><tr><th>Admin</th><th>Username</th><th>Password</th><th>Phone</th><th>Status</th><th></th></tr></thead><tbody>${list.map(a => `<tr>
+      <td><b>${esc(a.name)}</b>${a.me ? ' <small style="color:var(--muted)">(you)</small>' : ''}<br><small style="color:var(--muted)">${a.role === 'owner' ? 'Main Admin' : esc(a.designation || 'Admin')}</small></td>
+      <td><code>${esc(a.username)}</code></td>
+      <td><span class="pwv" data-pw="${esc(a.password)}">••••••••</span> <button class="btn sm" data-show="${a.id}">Show</button></td>
+      <td>${esc(a.phone || '')}</td><td>${a.active ? '<span class="st approved">Active</span>' : '<span class="st draft">Disabled</span>'}</td>
+      <td><div class="row" style="justify-content:flex-end;flex-wrap:nowrap"><button class="btn sm" data-ea="${a.id}">Edit</button>${a.role === 'owner' ? '' : `<button class="btn sm danger" data-da="${a.id}">Remove</button>`}</div></td></tr>`).join('')}</tbody></table></div><div id="am"></div></div>`;
+    $$('[data-show]').forEach(b => b.onclick = () => {
+      const sp = b.previousElementSibling, on = b.textContent === 'Show';
+      sp.textContent = on ? (sp.dataset.pw || '(not available – set a new one)') : '••••••••'; b.textContent = on ? 'Hide' : 'Show';
+    });
+    const form = a => {
+      const isNew = !a; a = a || { active: 1 };
+      const m = modal(`<div class="mh"><h2>${isNew ? 'Add admin' : 'Edit ' + esc(a.name)}</h2><button class="btn" id="acl">Close</button></div><form id="af" novalidate><div class="grid">
+        <div class="f"><label>Full name *</label><input name="name" value="${esc(a.name || '')}"></div>
+        <div class="f"><label>Username *</label><input name="username" value="${esc(a.username || '')}" autocapitalize="none" spellcheck="false"><div class="hint">Small letters or numbers, no spaces.</div></div>
+        <div class="f"><label>${isNew ? 'Password * (min 8)' : 'Password'}</label><input name="password" value="${isNew ? '' : esc(a.password || '')}" autocomplete="new-password"><div class="hint">${isNew ? 'Share this with the admin.' : 'Change it here to reset their password.'}</div></div>
+        <div class="f"><label>Phone</label><input name="phone" type="tel" value="${esc(a.phone || '')}"></div>
+        <div class="f"><label>Designation</label><input name="designation" value="${esc(a.designation || '')}" placeholder="Principal / Office Admin"></div>
+        ${!isNew && a.role !== 'owner' ? `<div class="f"><label>Status</label><select name="active"><option value="1" ${a.active ? 'selected' : ''}>Active</option><option value="0" ${!a.active ? 'selected' : ''}>Disabled (cannot log in)</option></select></div>` : ''}
+        </div><div id="afm"></div><div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn pri">${isNew ? 'Add admin' : 'Save changes'}</button></div></form>`);
       $('#acl', m).onclick = closeModal;
       $('#af', m).onsubmit = async e => {
         e.preventDefault(); const f = e.target;
-        try { await api('/admins', { method: 'POST', body: { name: f.name.value, email: f.email.value, phone: f.phone.value, designation: f.designation.value, password: f.password.value } }); closeModal(); adminAdmins(); }
+        const body = { name: f.name.value, username: f.username.value.trim().toLowerCase(), phone: f.phone.value, designation: f.designation.value };
+        const pw = f.password.value;
+        if (isNew || pw !== (a.password || '')) body.password = pw;
+        if (f.active) body.active = f.active.value === '1';
+        try { await api(isNew ? '/admins' : '/admins/' + a.id, { method: isNew ? 'POST' : 'PUT', body }); closeModal(); if (!isNew && a.me) { const bb = await api('/bootstrap'); S.me = bb.me; } adminAdmins(); }
         catch (er) { toast($('#afm', m), er.message); }
       };
     };
-    $$('[data-ta]').forEach(b => b.onclick = async () => {
-      const a = list.find(x => x.id === +b.dataset.ta);
-      try { await api('/admins/' + a.id, { method: 'PUT', body: { name: a.name, phone: a.phone, designation: a.designation, active: !a.active } }); adminAdmins(); } catch (er) { toast($('#am'), er.message); }
-    });
+    $('#adda').onclick = () => form(null);
+    $$('[data-ea]').forEach(b => b.onclick = () => form(list.find(x => x.id === +b.dataset.ea)));
     $$('[data-da]').forEach(b => b.onclick = async () => {
       const a = list.find(x => x.id === +b.dataset.da);
       if (!confirm(`Remove ${a.name} as admin?`)) return;

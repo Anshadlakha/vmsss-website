@@ -186,3 +186,7 @@ select.mk{padding:6px 2px}
 .det img.ph{width:140px;height:160px;object-fit:cover;border-radius:12px;border:1px solid var(--line)}
 .det dl{display:grid;grid-template-columns:150px 1fr;gap:6px 12px;margin:0}.det dt{color:var(--muted);font-size:.85rem}.det dd{margin:0;font-weight:600;overflow-wrap:anywhere}
 @media (max-width:640px){.det{grid-template-columns:1fr}.det dl{grid-template-columns:1fr}}
+.seg{display:flex;background:var(--cream);border:1px solid var(--line);border-radius:12px;padding:4px;margin:0 0 14px}
+.seg button{flex:1;border:0;background:transparent;padding:9px;border-radius:9px;font:inherit;font-weight:600;color:var(--muted);cursor:pointer}
+.seg button.on{background:#fff;color:var(--navy);box-shadow:0 1px 4px rgba(0,0,0,.1)}
+.pwv{font-family:ui-monospace,monospace}

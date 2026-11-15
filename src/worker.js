@@ -33,13 +33,26 @@ const MIGRATIONS = [
   `ALTER TABLE users ADD COLUMN classes TEXT DEFAULT '[]'`,
   `ALTER TABLE classes ADD COLUMN format TEXT DEFAULT ''`,
   `ALTER TABLE cards ADD COLUMN email TEXT DEFAULT ''`,
+  `ALTER TABLE users ADD COLUMN username TEXT DEFAULT ''`,
+  `ALTER TABLE users ADD COLUMN pw_enc TEXT DEFAULT ''`,
 ];
+const ADMIN_ROLES = ['owner', 'admin'];
 
 let schemaReady = false;
 async function ensureSchema(db) {
   if (schemaReady) return;
   for (const s of SCHEMA) await db.prepare(s).run();
   for (const s of MIGRATIONS) { try { await db.prepare(s).run(); } catch (e) { /* already there */ } }
+  await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username != ''").run();
+  // one-time fresh start for admin accounts: the school sets up a new main admin
+  // (username + password); teachers and report cards are kept
+  if (!(await db.prepare("SELECT value FROM settings WHERE key='admin_reset_v2'").first())) {
+    await db.prepare("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE role IN ('admin','owner'))").run();
+    await db.prepare("DELETE FROM users WHERE role IN ('admin','owner')").run();
+    await db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_reset_v2', datetime('now'))").run();
+  }
+  if (!(await db.prepare("SELECT value FROM settings WHERE key='pw_key'").first()))
+    await db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('pw_key', ?)").bind(randHex(32)).run();
   // teachers created before multi-class support: copy their single class over
   const old = (await db.prepare("SELECT id, class_name, section FROM users WHERE role='teacher' AND (classes IS NULL OR classes = '' OR classes = '[]') AND class_name != ''").all()).results;
   for (const u of old) await db.prepare('UPDATE users SET classes = ? WHERE id = ?').bind(JSON.stringify([{ c: u.class_name, s: u.section || '' }]), u.id).run();
@@ -56,6 +69,27 @@ async function ensureSchema(db) {
 }
 
 // ---------- helpers ----------
+// Admin passwords are stored twice: a PBKDF2 hash (used to log in) and an
+// AES-GCM encrypted copy that only the main admin can reveal.
+async function pwKey(env, db) {
+  const raw = env.PW_KEY || (await db.prepare("SELECT value FROM settings WHERE key='pw_key'").first()).value;
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
+  return crypto.subtle.importKey('raw', bytes, 'AES-GCM', false, ['encrypt', 'decrypt']);
+}
+async function encPw(env, db, pw) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await pwKey(env, db), new TextEncoder().encode(pw));
+  return b64(iv) + '.' + b64(ct);
+}
+async function decPw(env, db, v) {
+  try {
+    const [a, b] = String(v || '').split('.'); if (!b) return '';
+    const un = x => Uint8Array.from(atob(x), c => c.charCodeAt(0));
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: un(a) }, await pwKey(env, db), un(b)));
+  } catch (e) { return ''; }
+}
+const USERNAME_RE = /^[a-z0-9._-]{3,30}$/;
+const adminEmail = u => '#admin:' + u;  // placeholder so the unique email column is satisfied
 const json = (data, status = 200, headers = {}) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers } });
 const err = (msg, status = 400) => json({ error: msg }, status);
@@ -81,7 +115,7 @@ const cookieFor = (token, maxAge) => `vm_sess=${token}; Path=/; HttpOnly; Secure
 const clean = (v, max = 200) => String(v ?? '').trim().slice(0, max);
 const isImage = v => !v || (typeof v === 'string' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(v) && v.length < 600000);
 
-const PUBLIC_USER = 'id, role, name, email, phone, class_name, section, classes, designation, photo, signature, active, created_at';
+const PUBLIC_USER = 'id, role, name, email, username, phone, class_name, section, classes, designation, photo, signature, active, created_at';
 
 async function currentUser(req, db) {
   const t = getCookie(req, 'vm_sess');
@@ -172,26 +206,28 @@ async function api(req, env, url) {
 
   // setup + auth
   if (p === '/setup-status' && m === 'GET') {
-    const a = await db.prepare("SELECT COUNT(*) AS n FROM users WHERE role='admin'").first();
+    const a = await db.prepare("SELECT COUNT(*) AS n FROM users WHERE role='owner'").first();
     return json({ needsSetup: !a.n });
   }
   if (p === '/setup' && m === 'POST') {
-    const a = await db.prepare("SELECT COUNT(*) AS n FROM users WHERE role='admin'").first();
-    if (a.n) return err('Admin already exists', 403);
+    const a = await db.prepare("SELECT COUNT(*) AS n FROM users WHERE role='owner'").first();
+    if (a.n) return err('The main admin is already set up', 403);
     const b = await readBody(req);
-    const email = clean(b.email, 120).toLowerCase(), name = clean(b.name, 120), pw = String(b.password || '');
-    if (!name || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || pw.length < 8) return err('Enter name, valid email and a password of at least 8 characters');
+    const username = clean(b.username, 30).toLowerCase(), name = clean(b.name, 120), pw = String(b.password || '');
+    if (!name) return err('Enter your name');
+    if (!USERNAME_RE.test(username)) return err('Username: 3–30 letters or numbers (you can also use . _ -), no spaces');
+    if (pw.length < 8) return err('Password must be at least 8 characters');
     const salt = randHex(16);
-    await db.prepare("INSERT INTO users (role, name, email, pass_hash, salt, designation) VALUES ('admin',?,?,?,?, 'Administrator')").bind(name, email, await hashPassword(pw, salt), salt).run();
+    await db.prepare("INSERT INTO users (role, name, email, username, pass_hash, salt, pw_enc, designation) VALUES ('owner',?,?,?,?,?,?, 'Main Admin')")
+      .bind(name, adminEmail(username), username, await hashPassword(pw, salt), salt, await encPw(env, db, pw)).run();
     return json({ ok: true });
   }
   if (p === '/login' && m === 'POST') {
     const b = await readBody(req);
-    const email = clean(b.email, 120).toLowerCase();
-    const u = await db.prepare('SELECT id, role, pass_hash, salt, active FROM users WHERE email = ?').bind(email).first();
+    const username = clean(b.username, 30).toLowerCase();
+    const u = username ? await db.prepare("SELECT id, role, pass_hash, salt, active FROM users WHERE username = ? AND role IN ('owner','admin')").bind(username).first() : null;
     const h = u ? await hashPassword(String(b.password || ''), u.salt) : await hashPassword('x', 'y');
-    if (!u || !u.active || !safeEqual(h, u.pass_hash)) return err('Wrong email or password', 401);
-    if (u.role !== 'admin') return err('Teachers log in with the email code', 401);
+    if (!u || !u.active || !safeEqual(h, u.pass_hash)) return err('Wrong username or password', 401);
     const token = randHex(32);
     await db.prepare('DELETE FROM sessions WHERE expires < ?').bind(Date.now()).run();
     await db.prepare('INSERT INTO sessions (token, user_id, expires) VALUES (?,?,?)').bind(token, u.id, Date.now() + SESSION_DAYS * 864e5).run();
@@ -202,7 +238,8 @@ async function api(req, env, url) {
     const b = await readBody(req);
     const email = clean(b.email, 120).toLowerCase();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err('Enter a valid email');
-    const u = await db.prepare('SELECT id, name, active FROM users WHERE email = ?').bind(email).first();
+    let u = await db.prepare('SELECT id, name, active, role FROM users WHERE email = ?').bind(email).first();
+    if (u && u.role !== 'teacher') u = null; // admins use username + password
     const now = Date.now();
     const o = await db.prepare('SELECT * FROM otps WHERE email = ?').bind(email).first();
     if (o && now - o.last_sent < 60000) return err('Please wait a few seconds and try again.', 429);
@@ -231,8 +268,8 @@ async function api(req, env, url) {
       await db.prepare('UPDATE otps SET attempts = attempts + 1 WHERE email = ?').bind(email).run();
       return err('Wrong code. Please check your email and try again.', 401);
     }
-    const u = await db.prepare('SELECT id, active FROM users WHERE email = ?').bind(email).first();
-    if (!u || !u.active) return err('This account is not active', 401);
+    const u = await db.prepare('SELECT id, active, role FROM users WHERE email = ?').bind(email).first();
+    if (!u || !u.active || u.role !== 'teacher') return err('This account is not active', 401);
     await db.prepare("UPDATE otps SET code_hash = '', expires = 0 WHERE email = ?").bind(email).run();
     const token = randHex(32);
     await db.prepare('INSERT INTO sessions (token, user_id, expires) VALUES (?,?,?)').bind(token, u.id, Date.now() + SESSION_DAYS * 864e5).run();
@@ -246,7 +283,7 @@ async function api(req, env, url) {
 
   const me = await currentUser(req, db);
   if (!me) return err('Please log in', 401);
-  const isAdmin = me.role === 'admin';
+  const isAdmin = ADMIN_ROLES.includes(me.role), isOwner = me.role === 'owner';
 
   if (p === '/bootstrap' && m === 'GET') {
     const classes = (await db.prepare('SELECT name, subjects, co, format FROM classes ORDER BY sort, name').all()).results
@@ -261,7 +298,7 @@ async function api(req, env, url) {
     if (!safeEqual(await hashPassword(String(b.current || ''), u.salt), u.pass_hash)) return err('Current password is wrong');
     if (String(b.password || '').length < 8) return err('New password must be at least 8 characters');
     const salt = randHex(16);
-    await db.prepare('UPDATE users SET pass_hash = ?, salt = ? WHERE id = ?').bind(await hashPassword(b.password, salt), salt, me.id).run();
+    await db.prepare('UPDATE users SET pass_hash = ?, salt = ?, pw_enc = ? WHERE id = ?').bind(await hashPassword(b.password, salt), salt, await encPw(env, db, String(b.password)), me.id).run();
     return json({ ok: true });
   }
 
@@ -317,43 +354,52 @@ async function api(req, env, url) {
     }
   }
 
-  // ----- admins (admin) -----
+  // ----- admins (main admin only) -----
   if (p === '/admins' && m === 'GET') {
-    if (!isAdmin) return err('Admins only', 403);
-    const r = await db.prepare("SELECT id, name, email, phone, designation, active, created_at FROM users WHERE role='admin' ORDER BY id").all();
-    return json(r.results.map(a => ({ ...a, me: a.id === me.id })));
+    if (!isOwner) return err('Only the main admin can manage admins', 403);
+    const r = (await db.prepare("SELECT id, role, name, username, phone, designation, active, created_at, pw_enc FROM users WHERE role IN ('owner','admin') ORDER BY role DESC, id").all()).results;
+    const out = [];
+    for (const a of r) { const { pw_enc, ...x } = a; out.push({ ...x, password: await decPw(env, db, pw_enc), me: a.id === me.id }); }
+    return json(out);
   }
   if (p === '/admins' && m === 'POST') {
-    if (!isAdmin) return err('Admins only', 403);
+    if (!isOwner) return err('Only the main admin can manage admins', 403);
     const b = await readBody(req);
-    const email = clean(b.email, 120).toLowerCase(), name = clean(b.name, 120), pw = String(b.password || '');
-    if (!name || !EMAIL_RE.test(email)) return err('Enter the admin name and a valid email');
-    if (pw && pw.length < 8) return err('Password must be at least 8 characters (or leave it empty)');
-    if (await db.prepare('SELECT id FROM users WHERE email = ?').bind(email).first()) return err('This email is already used (by a teacher or admin)');
+    const username = clean(b.username, 30).toLowerCase(), name = clean(b.name, 120), pw = String(b.password || '');
+    if (!name) return err('Enter the admin name');
+    if (!USERNAME_RE.test(username)) return err('Username: 3–30 letters or numbers (you can also use . _ -), no spaces');
+    if (pw.length < 8) return err('Password must be at least 8 characters');
+    if (await db.prepare('SELECT id FROM users WHERE username = ?').bind(username).first()) return err('This username is already taken');
     const salt = randHex(16);
-    await db.prepare("INSERT INTO users (role, name, email, pass_hash, salt, phone, designation) VALUES ('admin',?,?,?,?,?,?)")
-      .bind(name, email, await hashPassword(pw || randHex(24), salt), salt, clean(b.phone, 20), clean(b.designation, 80) || 'Administrator').run();
+    await db.prepare("INSERT INTO users (role, name, email, username, pass_hash, salt, pw_enc, phone, designation) VALUES ('admin',?,?,?,?,?,?,?,?)")
+      .bind(name, adminEmail(username), username, await hashPassword(pw, salt), salt, await encPw(env, db, pw), clean(b.phone, 20), clean(b.designation, 80) || 'Admin').run();
     return json({ ok: true });
   }
   mt = p.match(/^\/admins\/(\d+)$/);
   if (mt) {
-    if (!isAdmin) return err('Admins only', 403);
+    if (!isOwner) return err('Only the main admin can manage admins', 403);
     const id = +mt[1];
-    const a = await db.prepare("SELECT id, active FROM users WHERE id=? AND role='admin'").bind(id).first();
+    const a = await db.prepare("SELECT id, role FROM users WHERE id=? AND role IN ('owner','admin')").bind(id).first();
     if (!a) return err('Admin not found', 404);
-    const others = await db.prepare("SELECT COUNT(*) AS n FROM users WHERE role='admin' AND active=1 AND id != ?").bind(id).first();
     if (m === 'PUT') {
       const b = await readBody(req);
-      const active = b.active === false ? 0 : 1;
-      if (!active && id === me.id) return err('You cannot disable your own account');
-      if (!active && !others.n) return err('At least one active admin is needed');
-      await db.prepare("UPDATE users SET name=?, phone=?, designation=?, active=? WHERE id=?").bind(clean(b.name, 120), clean(b.phone, 20), clean(b.designation, 80), active, id).run();
-      if (!active) await db.prepare('DELETE FROM sessions WHERE user_id=?').bind(id).run();
+      const username = clean(b.username, 30).toLowerCase(), name = clean(b.name, 120), pw = String(b.password || '');
+      if (!name) return err('Enter the admin name');
+      if (!USERNAME_RE.test(username)) return err('Username: 3–30 letters or numbers (you can also use . _ -), no spaces');
+      if (await db.prepare('SELECT id FROM users WHERE username = ? AND id != ?').bind(username, id).first()) return err('This username is already taken');
+      if (pw && pw.length < 8) return err('Password must be at least 8 characters');
+      const active = a.role === 'owner' ? 1 : (b.active === false ? 0 : 1);
+      await db.prepare('UPDATE users SET name=?, username=?, email=?, phone=?, designation=?, active=? WHERE id=?')
+        .bind(name, username, adminEmail(username), clean(b.phone, 20), clean(b.designation, 80), active, id).run();
+      if (pw) {
+        const salt = randHex(16);
+        await db.prepare('UPDATE users SET pass_hash=?, salt=?, pw_enc=? WHERE id=?').bind(await hashPassword(pw, salt), salt, await encPw(env, db, pw), id).run();
+      }
+      if ((pw || !active) && id !== me.id) await db.prepare('DELETE FROM sessions WHERE user_id=?').bind(id).run();
       return json({ ok: true });
     }
     if (m === 'DELETE') {
-      if (id === me.id) return err('You cannot remove your own account');
-      if (!others.n) return err('At least one active admin is needed');
+      if (a.role === 'owner') return err('The main admin cannot be removed');
       await db.prepare('DELETE FROM sessions WHERE user_id=?').bind(id).run();
       await db.prepare("DELETE FROM users WHERE id=? AND role='admin'").bind(id).run();
       return json({ ok: true });
