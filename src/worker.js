@@ -28,11 +28,21 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS idx_cards_teacher ON cards(teacher_id)`,
   `CREATE INDEX IF NOT EXISTS idx_cards_class ON cards(class_name)`,
 ];
+// columns added after the first release (ALTER fails harmlessly if they exist)
+const MIGRATIONS = [
+  `ALTER TABLE users ADD COLUMN classes TEXT DEFAULT '[]'`,
+  `ALTER TABLE classes ADD COLUMN format TEXT DEFAULT ''`,
+  `ALTER TABLE cards ADD COLUMN email TEXT DEFAULT ''`,
+];
 
 let schemaReady = false;
 async function ensureSchema(db) {
   if (schemaReady) return;
   for (const s of SCHEMA) await db.prepare(s).run();
+  for (const s of MIGRATIONS) { try { await db.prepare(s).run(); } catch (e) { /* already there */ } }
+  // teachers created before multi-class support: copy their single class over
+  const old = (await db.prepare("SELECT id, class_name, section FROM users WHERE role='teacher' AND (classes IS NULL OR classes = '' OR classes = '[]') AND class_name != ''").all()).results;
+  for (const u of old) await db.prepare('UPDATE users SET classes = ? WHERE id = ?').bind(JSON.stringify([{ c: u.class_name, s: u.section || '' }]), u.id).run();
   const n = await db.prepare('SELECT COUNT(*) AS n FROM classes').first();
   if (!n.n) {
     const st = DEFAULT_CLASSES.map(([c, subs], i) =>
@@ -71,15 +81,51 @@ const cookieFor = (token, maxAge) => `vm_sess=${token}; Path=/; HttpOnly; Secure
 const clean = (v, max = 200) => String(v ?? '').trim().slice(0, max);
 const isImage = v => !v || (typeof v === 'string' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(v) && v.length < 600000);
 
-const PUBLIC_USER = 'id, role, name, email, phone, class_name, section, designation, photo, signature, active';
+const PUBLIC_USER = 'id, role, name, email, phone, class_name, section, classes, designation, photo, signature, active, created_at';
 
 async function currentUser(req, db) {
   const t = getCookie(req, 'vm_sess');
   if (!t || !/^[a-f0-9]{64}$/.test(t)) return null;
   const row = await db.prepare(`SELECT ${PUBLIC_USER.split(', ').map(c => 'u.' + c).join(', ')}, s.expires FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?`).bind(t).first();
   if (!row || row.expires < Date.now() || !row.active) return null;
+  row.classes = parseClasses(row.classes);
   return row;
 }
+
+function parseClasses(v) {
+  try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a.filter(x => x && x.c) : []; } catch (e) { return []; }
+}
+function cleanClasses(list) {
+  const seen = new Set(), out = [];
+  for (const x of Array.isArray(list) ? list : []) {
+    const c = clean(x && x.c, 40), sec = clean(x && x.s, 10);
+    if (!c || seen.has(c + '|' + sec)) continue;
+    seen.add(c + '|' + sec); out.push({ c, s: sec });
+  }
+  return out.slice(0, 12);
+}
+const key = (v, dflt) => (String(v || '').replace(/[^A-Za-z0-9_]/g, '').slice(0, 16) || dflt);
+function cleanFormat(f) {
+  if (!f || !Array.isArray(f.terms) || !f.terms.length) return '';
+  const tk = new Set();
+  const terms = f.terms.slice(0, 4).map((t, i) => {
+    let k = key(t.k, 't' + (i + 1)); while (tk.has(k)) k += 'x'; tk.add(k);
+    const ck = new Set();
+    const cols = (Array.isArray(t.cols) ? t.cols : []).slice(0, 10).map((c, j) => {
+      let k2 = key(c.k, 'c' + (j + 1)); while (ck.has(k2)) k2 += 'x'; ck.add(k2);
+      return { k: k2, l: clean(c.l, 24), m: Math.max(0, Math.min(1000, Number(c.m) || 0)) };
+    }).filter(c => c.l);
+    return { k, n: clean(t.n, 30) || 'Term ' + (i + 1), cols };
+  }).filter(t => t.cols.length);
+  if (!terms.length) return '';
+  const scale = (Array.isArray(f.scale) ? f.scale : []).slice(0, 15)
+    .map(x => [Math.max(0, Math.min(100, Number(x && x[0]) || 0)), clean(x && x[1], 6)]).filter(x => x[1]);
+  const co = (Array.isArray(f.co) ? f.co : []).slice(0, 10).map(x => [clean(x && x[0], 6), clean(x && x[1], 30)]).filter(x => x[0]);
+  const pass = Math.max(0, Math.min(100, Number(f.pass) || 0));
+  return JSON.stringify({ terms, scale, pass, co });
+}
+const parseFormat = v => { try { return v ? JSON.parse(v) : null; } catch (e) { return null; } };
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 async function readBody(req) {
   if (!(req.headers.get('content-type') || '').includes('application/json')) throw new Error('Expected JSON');
@@ -90,7 +136,7 @@ function cardFields(b) {
   return {
     student_name: clean(b.student_name, 120), admission_no: clean(b.admission_no, 60), dob: clean(b.dob, 20),
     father: clean(b.father, 120), mother: clean(b.mother, 120), mobile: clean(b.mobile, 20), roll_no: clean(b.roll_no, 20),
-    attendance: clean(b.attendance, 10), section: clean(b.section, 10),
+    attendance: clean(b.attendance, 10), section: clean(b.section, 10), email: clean(b.email, 120).toLowerCase(),
     data: JSON.stringify(b.data && typeof b.data === 'object' ? b.data : {}).slice(0, 60000),
   };
 }
@@ -203,8 +249,8 @@ async function api(req, env, url) {
   const isAdmin = me.role === 'admin';
 
   if (p === '/bootstrap' && m === 'GET') {
-    const classes = (await db.prepare('SELECT name, subjects, co FROM classes ORDER BY sort, name').all()).results
-      .map(c => ({ name: c.name, subjects: JSON.parse(c.subjects), co: JSON.parse(c.co) }));
+    const classes = (await db.prepare('SELECT name, subjects, co, format FROM classes ORDER BY sort, name').all()).results
+      .map(c => ({ name: c.name, subjects: JSON.parse(c.subjects), co: JSON.parse(c.co), format: parseFormat(c.format) }));
     const settings = Object.fromEntries((await db.prepare('SELECT key, value FROM settings').all()).results.map(r => [r.key, r.value]));
     const { expires, ...user } = me;
     return json({ me: user, classes, settings });
@@ -222,20 +268,27 @@ async function api(req, env, url) {
   // ----- teachers (admin) -----
   if (p === '/teachers' && m === 'GET') {
     if (!isAdmin) return err('Admins only', 403);
-    const r = await db.prepare(`SELECT ${PUBLIC_USER}, (SELECT COUNT(*) FROM cards c WHERE c.teacher_id = users.id) AS cards FROM users WHERE role='teacher' ORDER BY name`).all();
-    return json(r.results);
+    const r = await db.prepare(`SELECT ${PUBLIC_USER},
+      (SELECT COUNT(*) FROM cards c WHERE c.teacher_id = users.id) AS cards,
+      (SELECT COUNT(*) FROM cards c WHERE c.teacher_id = users.id AND c.status = 'draft') AS drafts,
+      (SELECT COUNT(*) FROM cards c WHERE c.teacher_id = users.id AND c.status = 'submitted') AS submitted,
+      (SELECT COUNT(*) FROM cards c WHERE c.teacher_id = users.id AND c.status = 'approved') AS approved
+      FROM users WHERE role='teacher' ORDER BY name`).all();
+    return json(r.results.map(t => ({ ...t, classes: parseClasses(t.classes) })));
   }
   if (p === '/teachers' && m === 'POST') {
     if (!isAdmin) return err('Admins only', 403);
     const b = await readBody(req);
     const email = clean(b.email, 120).toLowerCase(), name = clean(b.name, 120), pw = String(b.password || '');
-    if (!name || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err('Enter teacher name and a valid login email');
+    if (!name || !EMAIL_RE.test(email)) return err('Enter teacher name and a valid login email');
     if (!isImage(b.photo) || !isImage(b.signature)) return err('Photo/signature must be an image under 400 KB');
     const ex = await db.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
     if (ex) return err('This email is already used');
+    const cl = cleanClasses(b.classes);
+    if (!cl.length) return err('Choose at least one class for this teacher');
     const salt = randHex(16);
-    await db.prepare("INSERT INTO users (role, name, email, pass_hash, salt, phone, class_name, section, designation, photo, signature) VALUES ('teacher',?,?,?,?,?,?,?,?,?,?)")
-      .bind(name, email, await hashPassword(pw || randHex(24), salt), salt, clean(b.phone, 20), clean(b.class_name, 40), clean(b.section, 10), clean(b.designation, 80), b.photo || '', b.signature || '').run();
+    await db.prepare("INSERT INTO users (role, name, email, pass_hash, salt, phone, class_name, section, classes, designation, photo, signature) VALUES ('teacher',?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(name, email, await hashPassword(pw || randHex(24), salt), salt, clean(b.phone, 20), cl[0].c, cl[0].s, JSON.stringify(cl), clean(b.designation, 80), b.photo || '', b.signature || '').run();
     return json({ ok: true });
   }
   let mt = p.match(/^\/teachers\/(\d+)$/);
@@ -248,19 +301,61 @@ async function api(req, env, url) {
       const email = clean(b.email, 120).toLowerCase();
       const ex = await db.prepare('SELECT id FROM users WHERE email = ? AND id != ?').bind(email, id).first();
       if (ex) return err('This email is already used');
-      await db.prepare("UPDATE users SET name=?, email=?, phone=?, class_name=?, section=?, designation=?, photo=?, signature=?, active=? WHERE id=? AND role='teacher'")
-        .bind(clean(b.name, 120), email, clean(b.phone, 20), clean(b.class_name, 40), clean(b.section, 10), clean(b.designation, 80), b.photo || '', b.signature || '', b.active === false ? 0 : 1, id).run();
+      const cl = cleanClasses(b.classes);
+      if (!cl.length) return err('Choose at least one class for this teacher');
+      if (!clean(b.name, 120) || !EMAIL_RE.test(email)) return err('Enter teacher name and a valid login email');
+      await db.prepare("UPDATE users SET name=?, email=?, phone=?, class_name=?, section=?, classes=?, designation=?, photo=?, signature=?, active=? WHERE id=? AND role='teacher'")
+        .bind(clean(b.name, 120), email, clean(b.phone, 20), cl[0].c, cl[0].s, JSON.stringify(cl), clean(b.designation, 80), b.photo || '', b.signature || '', b.active === false ? 0 : 1, id).run();
+      if (b.active === false) await db.prepare('DELETE FROM sessions WHERE user_id=?').bind(id).run();
       if (b.logout_all) await db.prepare('DELETE FROM sessions WHERE user_id=?').bind(id).run();
-      if (false) {
-        const salt = randHex(16);
-        await db.prepare('UPDATE users SET pass_hash=?, salt=? WHERE id=?').bind(await hashPassword(b.password, salt), salt, id).run();
-        await db.prepare('DELETE FROM sessions WHERE user_id=?').bind(id).run();
-      }
       return json({ ok: true });
     }
     if (m === 'DELETE') {
       await db.prepare('DELETE FROM sessions WHERE user_id=?').bind(id).run();
       await db.prepare("DELETE FROM users WHERE id=? AND role='teacher'").bind(id).run();
+      return json({ ok: true });
+    }
+  }
+
+  // ----- admins (admin) -----
+  if (p === '/admins' && m === 'GET') {
+    if (!isAdmin) return err('Admins only', 403);
+    const r = await db.prepare("SELECT id, name, email, phone, designation, active, created_at FROM users WHERE role='admin' ORDER BY id").all();
+    return json(r.results.map(a => ({ ...a, me: a.id === me.id })));
+  }
+  if (p === '/admins' && m === 'POST') {
+    if (!isAdmin) return err('Admins only', 403);
+    const b = await readBody(req);
+    const email = clean(b.email, 120).toLowerCase(), name = clean(b.name, 120), pw = String(b.password || '');
+    if (!name || !EMAIL_RE.test(email)) return err('Enter the admin name and a valid email');
+    if (pw && pw.length < 8) return err('Password must be at least 8 characters (or leave it empty)');
+    if (await db.prepare('SELECT id FROM users WHERE email = ?').bind(email).first()) return err('This email is already used (by a teacher or admin)');
+    const salt = randHex(16);
+    await db.prepare("INSERT INTO users (role, name, email, pass_hash, salt, phone, designation) VALUES ('admin',?,?,?,?,?,?)")
+      .bind(name, email, await hashPassword(pw || randHex(24), salt), salt, clean(b.phone, 20), clean(b.designation, 80) || 'Administrator').run();
+    return json({ ok: true });
+  }
+  mt = p.match(/^\/admins\/(\d+)$/);
+  if (mt) {
+    if (!isAdmin) return err('Admins only', 403);
+    const id = +mt[1];
+    const a = await db.prepare("SELECT id, active FROM users WHERE id=? AND role='admin'").bind(id).first();
+    if (!a) return err('Admin not found', 404);
+    const others = await db.prepare("SELECT COUNT(*) AS n FROM users WHERE role='admin' AND active=1 AND id != ?").bind(id).first();
+    if (m === 'PUT') {
+      const b = await readBody(req);
+      const active = b.active === false ? 0 : 1;
+      if (!active && id === me.id) return err('You cannot disable your own account');
+      if (!active && !others.n) return err('At least one active admin is needed');
+      await db.prepare("UPDATE users SET name=?, phone=?, designation=?, active=? WHERE id=?").bind(clean(b.name, 120), clean(b.phone, 20), clean(b.designation, 80), active, id).run();
+      if (!active) await db.prepare('DELETE FROM sessions WHERE user_id=?').bind(id).run();
+      return json({ ok: true });
+    }
+    if (m === 'DELETE') {
+      if (id === me.id) return err('You cannot remove your own account');
+      if (!others.n) return err('At least one active admin is needed');
+      await db.prepare('DELETE FROM sessions WHERE user_id=?').bind(id).run();
+      await db.prepare("DELETE FROM users WHERE id=? AND role='admin'").bind(id).run();
       return json({ ok: true });
     }
   }
@@ -272,9 +367,9 @@ async function api(req, env, url) {
     if (!Array.isArray(b.classes) || !b.classes.length) return err('No classes');
     const st = [db.prepare('DELETE FROM classes')];
     b.classes.slice(0, 60).forEach((c, i) => {
-      const subs = (c.subjects || []).map(s => clean(s, 40)).filter(Boolean).slice(0, 15);
+      const subs = (c.subjects || []).map(s => clean(s, 40)).filter(Boolean).slice(0, 20);
       const co = (c.co || []).map(s => clean(s, 40)).filter(Boolean).slice(0, 12);
-      if (clean(c.name, 40)) st.push(db.prepare('INSERT OR REPLACE INTO classes (name, subjects, co, sort) VALUES (?,?,?,?)').bind(clean(c.name, 40), JSON.stringify(subs), JSON.stringify(co), i));
+      if (clean(c.name, 40)) st.push(db.prepare('INSERT OR REPLACE INTO classes (name, subjects, co, sort, format) VALUES (?,?,?,?,?)').bind(clean(c.name, 40), JSON.stringify(subs), JSON.stringify(co), i, cleanFormat(c.format)));
     });
     await db.batch(st);
     return json({ ok: true });
@@ -291,16 +386,23 @@ async function api(req, env, url) {
   // ----- report cards -----
   if (p === '/cards' && m === 'GET') {
     const q = url.searchParams, where = [], args = [];
-    if (!isAdmin) { where.push('c.teacher_id = ?'); args.push(me.id); }
-    else {
+    if (!isAdmin) {
+      where.push('c.teacher_id = ?'); args.push(me.id);
+      if (q.get('class')) { where.push('c.class_name = ?'); args.push(q.get('class')); }
+      if (q.get('section') !== null && q.get('class')) { where.push("IFNULL(c.section,'') = ?"); args.push(q.get('section') || ''); }
+      if (q.get('status')) { where.push('c.status = ?'); args.push(q.get('status')); }
+    } else {
       if (q.get('class')) { where.push('c.class_name = ?'); args.push(q.get('class')); }
       if (q.get('teacher')) { where.push('c.teacher_id = ?'); args.push(+q.get('teacher')); }
       if (q.get('status')) { where.push('c.status = ?'); args.push(q.get('status')); }
       else where.push("c.status != 'draft'");
     }
     const s = clean(q.get('q'), 80);
-    if (s) { where.push('(c.student_name LIKE ? OR c.mobile LIKE ? OR c.father LIKE ? OR c.mother LIKE ? OR c.admission_no LIKE ?)'); for (let i = 0; i < 5; i++) args.push('%' + s + '%'); }
-    const sql = `SELECT c.id, c.class_name, c.section, c.student_name, c.admission_no, c.father, c.mother, c.mobile, c.roll_no, c.status, c.updated_at, u.name AS teacher_name
+    if (s) {
+      const cols = ['c.student_name', 'c.mobile', 'c.email', 'c.admission_no', 'c.roll_no', 'c.father', 'c.mother'];
+      where.push('(' + cols.map(c => c + ' LIKE ?').join(' OR ') + ')'); cols.forEach(() => args.push('%' + s + '%'));
+    }
+    const sql = `SELECT c.id, c.class_name, c.section, c.student_name, c.admission_no, c.father, c.mother, c.mobile, c.email, c.roll_no, c.status, c.updated_at, u.name AS teacher_name
       FROM cards c LEFT JOIN users u ON u.id = c.teacher_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY c.class_name, CAST(c.roll_no AS INTEGER), c.student_name LIMIT 1000`;
     return json((await db.prepare(sql).bind(...args).all()).results);
   }
@@ -308,13 +410,18 @@ async function api(req, env, url) {
     const b = await readBody(req);
     const f = cardFields(b);
     if (!f.student_name) return err('Student name is required');
-    const cls = isAdmin ? clean(b.class_name, 40) : me.class_name;
-    const sec = isAdmin ? f.section : me.section;
+    let cls, sec;
+    if (isAdmin) { cls = clean(b.class_name, 40); sec = f.section; }
+    else {
+      const want = me.classes.find(x => x.c === clean(b.class_name, 40) && x.s === clean(b.section, 10)) || (me.classes.length === 1 ? me.classes[0] : null);
+      if (!want) return err(me.classes.length ? 'Choose one of your classes first.' : 'No class assigned. Ask the admin to set your class.');
+      cls = want.c; sec = want.s;
+    }
     const teacher = isAdmin ? (+b.teacher_id || null) : me.id;
-    if (!cls) return err('No class assigned. Ask the admin to set your class.');
+    if (!cls) return err('Choose a class');
     const set = await db.prepare("SELECT value FROM settings WHERE key='session'").first();
-    const r = await db.prepare('INSERT INTO cards (teacher_id, class_name, section, student_name, admission_no, dob, father, mother, mobile, roll_no, attendance, data, status, session) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-      .bind(teacher, cls, sec, f.student_name, f.admission_no, f.dob, f.father, f.mother, f.mobile, f.roll_no, f.attendance, f.data, b.submit ? 'submitted' : 'draft', set?.value || '').run();
+    const r = await db.prepare('INSERT INTO cards (teacher_id, class_name, section, student_name, admission_no, dob, father, mother, mobile, email, roll_no, attendance, data, status, session) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .bind(teacher, cls, sec, f.student_name, f.admission_no, f.dob, f.father, f.mother, f.mobile, f.email, f.roll_no, f.attendance, f.data, b.submit ? 'submitted' : 'draft', set?.value || '').run();
     return json({ ok: true, id: r.meta.last_row_id });
   }
   mt = p.match(/^\/cards\/(\d+)(\/(submit|approve|reopen))?$/);
@@ -331,8 +438,8 @@ async function api(req, env, url) {
       if (!f.student_name) return err('Student name is required');
       let status = card.status;
       if (!isAdmin && b.submit) status = 'submitted';
-      await db.prepare("UPDATE cards SET student_name=?, admission_no=?, dob=?, father=?, mother=?, mobile=?, roll_no=?, attendance=?, data=?, section=?, status=?, updated_at=datetime('now') WHERE id=?")
-        .bind(f.student_name, f.admission_no, f.dob, f.father, f.mother, f.mobile, f.roll_no, f.attendance, f.data, isAdmin ? (f.section || card.section) : card.section, status, id).run();
+      await db.prepare("UPDATE cards SET student_name=?, admission_no=?, dob=?, father=?, mother=?, mobile=?, email=?, roll_no=?, attendance=?, data=?, section=?, status=?, updated_at=datetime('now') WHERE id=?")
+        .bind(f.student_name, f.admission_no, f.dob, f.father, f.mother, f.mobile, f.email, f.roll_no, f.attendance, f.data, isAdmin ? (f.section || card.section) : card.section, status, id).run();
       return json({ ok: true });
     }
     if (m === 'POST' && action === 'submit') {

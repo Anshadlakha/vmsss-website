@@ -130,38 +130,55 @@
   const main = () => $('#main');
 
   // ---------------- teacher ----------------
+  const ckey = x => x.c + '|' + (x.s || '');
+  const clabel = x => 'Class ' + x.c + (x.s ? ' – ' + x.s : '');
+  function curClass() {
+    const list = S.me.classes || [];
+    let k = ''; try { k = localStorage.getItem('vm_cls_' + S.me.id) || ''; } catch (e) {}
+    return list.find(x => ckey(x) === k) || list[0] || null;
+  }
+  function setClass(x) { try { localStorage.setItem('vm_cls_' + S.me.id, ckey(x)); } catch (e) {} }
   async function teacherHome() {
-    const me = S.me;
+    const me = S.me, list = me.classes || [], cur = curClass();
     main().innerHTML = `<div class="prof">
         <div class="prof-ph">${me.photo ? `<img src="${esc(me.photo)}" alt="${esc(me.name)}">` : `<span>${esc(initials(me.name))}</span>`}</div>
         <div class="prof-in">
-          <span class="prof-tag">Class Teacher</span>
+          <span class="prof-tag">${list.length > 1 ? 'Teacher · ' + list.length + ' classes' : 'Class Teacher'}</span>
           <h1>${esc(me.name)}</h1>
           <div class="prof-grid">
-            <div><small>Class</small><b>${esc(me.class_name || 'Not assigned')}</b></div>
-            <div><small>Section</small><b>${esc(me.section || '–')}</b></div>
+            <div><small>${list.length > 1 ? 'Classes' : 'Class'}</small><b>${list.length ? list.map(x => esc(x.c + (x.s ? ' – ' + x.s : ''))).join(', ') : 'Not assigned'}</b></div>
             <div><small>Designation</small><b>${esc(me.designation || 'Teacher')}</b></div>
             <div><small>Session</small><b>${esc(S.settings.session || '')}</b></div>
             <div><small>Phone</small><b>${me.phone ? `<a href="tel:${esc(me.phone)}">${esc(me.phone)}</a>` : '–'}</b></div>
-            <div><small>Email</small><b>${esc(me.email)}</b></div>
+            <div style="grid-column:span 2"><small>Email</small><b>${esc(me.email)}</b></div>
           </div>
           ${me.signature ? `<div class="prof-sig"><img src="${esc(me.signature)}" alt="Signature"><small>Signature</small></div>` : '<div class="prof-sig none"><small>No signature added – ask the admin to upload it.</small></div>'}
         </div></div>
-      ${!clsOf(me.class_name) ? '<div class="err">Your class is not set up yet. Please ask the admin to assign your class.</div>' : ''}
-      <div class="panel"><div class="row" style="justify-content:space-between;margin-bottom:12px"><h3 style="margin:0">My report cards</h3>
-      <div class="row"><input id="tq" class="mk" style="width:200px;text-align:left" placeholder="Search student…"><button class="btn gold" id="newc" ${clsOf(me.class_name) ? '' : 'disabled'}>+ New report card</button></div></div>
+      ${!list.length ? '<div class="err">No class is assigned to you yet. Please ask the admin to assign your class.</div>' : ''}
+      ${list.length > 1 ? `<h3 style="margin:4px 0 8px">Choose the class you want to work on</h3><div class="cpick">${list.map(x => `<button data-k="${esc(ckey(x))}" class="${cur && ckey(cur) === ckey(x) ? 'on' : ''}"><b>${esc(clabel(x))}</b><small>${clsOf(x.c) ? (clsOf(x.c).subjects.length + ' subjects') : 'Format not set up yet'}</small></button>`).join('')}</div>` : ''}
+      ${cur && !clsOf(cur.c) ? `<div class="err">The report card format for Class ${esc(cur.c)} is not set up yet. Please ask the admin.</div>` : ''}
+      <div class="panel"><div class="row" style="justify-content:space-between;margin-bottom:12px"><h3 style="margin:0">${cur ? esc(clabel(cur)) + ' · report cards' : 'My report cards'}</h3>
+      <button class="btn gold" id="newc" ${cur && clsOf(cur.c) ? '' : 'disabled'}>+ New report card</button></div>
+      <div class="srch"><input id="tq" class="mk" placeholder="Search by student name, mobile, email, admission no. or roll no.">
+      <select id="tst" class="mk" style="width:auto"><option value="">All report cards</option><option value="draft">Drafts</option><option value="submitted">Sent to admin</option><option value="approved">Approved</option></select></div>
       <div class="tw" id="tl"><div class="empty">Loading…</div></div></div>`;
+    $$('.cpick button').forEach(b => b.onclick = () => { setClass(list.find(x => ckey(x) === b.dataset.k)); teacherHome(); });
     $('#newc').onclick = () => editor(null);
     const load = async () => {
-      const q = $('#tq').value.trim();
-      const rows = await api('/cards' + (q ? '?q=' + encodeURIComponent(q) : ''));
-      $('#tl').innerHTML = rows.length ? `<table class="lt"><thead><tr><th>Roll</th><th>Student</th><th>Admission No.</th><th>Father</th><th>Status</th><th></th></tr></thead><tbody>${rows.map(r => `<tr>
-        <td>${esc(r.roll_no)}</td><td><b>${esc(r.student_name)}</b></td><td>${esc(r.admission_no)}</td><td>${esc(r.father)}</td><td>${statusPill(r.status)}</td>
+      if (!cur) { $('#tl').innerHTML = ''; return; }
+      const qs = new URLSearchParams({ class: cur.c, section: cur.s || '' });
+      if ($('#tq').value.trim()) qs.set('q', $('#tq').value.trim());
+      if ($('#tst').value) qs.set('status', $('#tst').value);
+      const rows = await api('/cards?' + qs);
+      const filtered = $('#tq').value.trim() || $('#tst').value;
+      $('#tl').innerHTML = rows.length ? `<table class="lt"><thead><tr><th>Roll</th><th>Student</th><th>Admission No.</th><th>Mobile</th><th>Email</th><th>Status</th><th></th></tr></thead><tbody>${rows.map(r => `<tr>
+        <td>${esc(r.roll_no)}</td><td><b>${esc(r.student_name)}</b><br><small style="color:var(--muted)">${esc(r.father ? 'F: ' + r.father : '')}</small></td><td>${esc(r.admission_no)}</td><td>${esc(r.mobile)}</td><td>${esc(r.email)}</td><td>${statusPill(r.status)}</td>
         <td class="row" style="justify-content:flex-end"><button class="btn sm" data-ed="${r.id}">${r.status === 'approved' ? 'View' : 'Open'}</button></td></tr>`).join('')}</tbody></table>`
-        : '<div class="empty">No report cards yet. Click “+ New report card” to add your first student.</div>';
+        : `<div class="empty">${filtered ? 'No report cards match your search.' : 'No report cards yet. Click “+ New report card” to add your first student.'}</div>`;
       $$('[data-ed]').forEach(b => b.onclick = () => editor(+b.dataset.ed));
     };
     let tmr; $('#tq').oninput = () => { clearTimeout(tmr); tmr = setTimeout(load, 300); };
+    $('#tst').onchange = load;
     load();
   }
   function passwordForm() {
@@ -178,38 +195,39 @@
     back = back || (isAdmin ? adminHome : teacherHome);
     let card;
     if (id) card = await api('/cards/' + id);
-    else card = { class_name: S.me.class_name, section: S.me.section, session: S.settings.session, data: {}, status: 'draft', teacher_signature: S.me.signature };
-    const cls = clsOf(card.class_name) || { name: card.class_name, subjects: Object.keys((card.data && card.data.t1) || {}), co: Object.keys((card.data && card.data.co) || {}) };
+    else { const cur = curClass() || {}; card = { class_name: cur.c, section: cur.s, session: S.settings.session, data: {}, status: 'draft', teacher_signature: S.me.signature }; }
+    const cls = clsOf(card.class_name) || fallbackCls(card);
+    const F = RC.formatOf(cls), multi = F.terms.length > 1, GR = F.scale.map(x => x[1]);
     const locked = !isAdmin && card.status === 'approved';
     const d = card.data = card.data || {};
-    d.t1 = d.t1 || {}; d.t2 = d.t2 || {}; d.ov = d.ov || {}; d.co = d.co || {};
+    F.terms.forEach(t => { d[t.k] = d[t.k] || {}; }); d.ov = d.ov || {}; d.co = d.co || {};
     const dis = locked ? 'disabled' : '';
     const info = [['student_name', 'Student name *'], ['roll_no', 'Roll number'], ['admission_no', 'Admission number'], ['dob', 'Date of birth', 'date'],
-      ['father', 'Father’s name'], ['mother', 'Mother’s name'], ['mobile', 'Mobile number', 'tel'], ['attendance', 'Attendance % (whole session)', 'number']];
+      ['father', 'Father’s name'], ['mother', 'Mother’s name'], ['mobile', 'Mobile number', 'tel'], ['email', 'Email (parent / student)', 'email'], ['attendance', 'Attendance % (whole session)', 'number']];
     const toInput = v => { // dd-mm-yyyy -> yyyy-mm-dd for date input
       const m = String(v || '').match(/^(\d{2})-(\d{2})-(\d{4})$/); return m ? `${m[3]}-${m[2]}-${m[1]}` : (v || '');
     };
-    const termTable = (t, cols, label) => `<div class="panel"><h3>${label}</h3><div class="tw"><table class="mt"><thead><tr><th style="text-align:left;padding-left:8px">Subject</th>
-      ${cols.map(([, l, m]) => `<th>${l}<small>out of ${m}</small></th>`).join('')}<th>Total<small>auto · out of 100</small></th><th>Grade<small>auto</small></th></tr></thead><tbody>
-      ${cls.subjects.map(s => `<tr><td class="s">${esc(s)}</td>${cols.map(([k, , m]) => `<td><input class="mk" data-t="${t}" data-s="${esc(s)}" data-k="${k}" data-max="${m}" inputmode="decimal" ${dis}></td>`).join('')}
-      <td><input class="mk tot" data-t="${t}" data-s="${esc(s)}" data-k="tot" data-max="100" inputmode="decimal" title="Auto-calculated. Type to correct it; clear to go back to auto." ${dis}></td>
-      <td><select class="mk gr" data-t="${t}" data-s="${esc(s)}" data-k="gr" ${dis}><option value="">Auto</option>${RC.GRADES.map(g => `<option>${g}</option>`).join('')}</select></td></tr>`).join('')}
-      </tbody></table></div><div class="sumbar" id="sum-${t}"></div></div>`;
+    const grOpts = () => `<option value="">Auto</option>${GR.map(g => `<option>${esc(g)}</option>`).join('')}`;
+    const termTable = t => `<div class="panel"><h3>${esc(t.n)} – Scholastic</h3><div class="tw"><table class="mt"><thead><tr><th style="text-align:left;padding-left:8px">Subject</th>
+      ${t.cols.map(c => `<th>${esc(c.l)}<small>out of ${c.m}</small></th>`).join('')}<th>Total<small>auto · out of ${t.max}</small></th><th>Grade<small>auto</small></th></tr></thead><tbody>
+      ${cls.subjects.map(s => `<tr><td class="s">${esc(s)}</td>${t.cols.map(c => `<td><input class="mk" data-t="${t.k}" data-s="${esc(s)}" data-k="${c.k}" data-max="${c.m}" inputmode="decimal" ${dis}></td>`).join('')}
+      <td><input class="mk tot" data-t="${t.k}" data-s="${esc(s)}" data-k="tot" data-max="${t.max}" inputmode="decimal" title="Auto-calculated. Type to correct it; clear to go back to auto." ${dis}></td>
+      <td><select class="mk gr" data-t="${t.k}" data-s="${esc(s)}" data-k="gr" ${dis}>${grOpts()}</select></td></tr>`).join('')}
+      </tbody></table></div><div class="sumbar" id="sum-${t.k}"></div></div>`;
     main().innerHTML = `<div class="row" style="justify-content:space-between;margin-bottom:12px">
       <div><h1 class="pg">${id ? esc(card.student_name) : 'New report card'}</h1><p class="sub" style="margin:0">Class ${esc(card.class_name)}${card.section ? ' – ' + esc(card.section) : ''} · Session ${esc(card.session || S.settings.session)} ${id ? '· ' + statusPill(card.status) : ''}${card.teacher_name ? ' · Teacher: ' + esc(card.teacher_name) : ''}</p></div>
       <button class="btn" id="bk">← Back</button></div>
       ${locked ? '<div class="okmsg">This report card is approved by the admin and can no longer be edited.</div>' : ''}
       <div class="panel"><h3>Student details</h3><div class="grid">${info.map(([k, l, ty]) => `<div class="f"><label>${l}</label><input data-i="${k}" type="${ty || 'text'}" ${ty === 'number' ? 'min="0" max="100" step="0.1"' : ''} value="${esc(ty === 'date' ? toInput(card[k]) : (card[k] || ''))}" ${dis}></div>`).join('')}
       ${isAdmin ? `<div class="f"><label>Section</label><input data-i="section" value="${esc(card.section || '')}"></div>` : ''}</div></div>
-      ${termTable('t1', RC.T1, 'Term I – Scholastic')}
-      ${termTable('t2', RC.T2, 'Term II – Scholastic')}
-      <div class="panel"><h3>Overall (50% Term I + 50% Term II)</h3><div class="tw"><table class="mt" style="min-width:420px"><thead><tr><th style="text-align:left;padding-left:8px">Subject</th><th>Overall<small>auto</small></th><th>Grade<small>auto</small></th></tr></thead><tbody>
-      ${cls.subjects.map(s => `<tr><td class="s">${esc(s)}</td><td><input class="mk auto" data-ovs="${esc(s)}" readonly tabindex="-1"></td><td><select class="mk gr" data-t="ov" data-s="${esc(s)}" data-k="gr" ${dis}><option value="">Auto</option>${RC.GRADES.map(g => `<option>${g}</option>`).join('')}</select></td></tr>`).join('')}
-      </tbody></table></div>
-      <div class="legend"><span><i style="background:#eef3fb;border:1px solid #d5def0"></i>Auto-calculated</span><span><i style="background:#fff6dc;border:1px solid var(--gold)"></i>Corrected by hand</span><span><i style="background:var(--badbg);border:1px solid var(--bad)"></i>More than maximum marks</span><span>Use AB (absent), ML (medical leave) or LA (late admission) if needed.</span></div></div>
-      <div class="panel"><h3>Co-scholastic area</h3><div class="tw"><table class="mt" style="min-width:420px"><thead><tr><th style="text-align:left;padding-left:8px">Activity</th><th>Term I</th><th>Term II</th></tr></thead><tbody>
-      ${cls.co.map(n => `<tr><td class="s">${esc(n)}</td>${['t1', 't2'].map(t => `<td><select class="mk" data-co="${esc(n)}" data-ct="${t}" ${dis}><option value="">–</option>${RC.CO_GRADES.map(g => `<option>${g}</option>`).join('')}</select></td>`).join('')}</tr>`).join('')}
-      </tbody></table></div><div class="legend">A – Outstanding · B – Very Good · C – Good · D – Needs Improvement</div></div>
+      ${F.terms.map(termTable).join('')}
+      ${multi ? `<div class="panel"><h3>Overall (average of ${F.terms.map(t => esc(t.n)).join(' + ')})</h3><div class="tw"><table class="mt" style="min-width:420px"><thead><tr><th style="text-align:left;padding-left:8px">Subject</th><th>Overall %<small>auto</small></th><th>Grade<small>auto</small></th></tr></thead><tbody>
+      ${cls.subjects.map(s => `<tr><td class="s">${esc(s)}</td><td><input class="mk auto" data-ovs="${esc(s)}" readonly tabindex="-1"></td><td><select class="mk gr" data-t="ov" data-s="${esc(s)}" data-k="gr" ${dis}>${grOpts()}</select></td></tr>`).join('')}
+      </tbody></table></div></div>` : ''}
+      <div class="panel" style="padding-top:10px"><div class="legend"><span><i style="background:#eef3fb;border:1px solid #d5def0"></i>Auto-calculated</span><span><i style="background:#fff6dc;border:1px solid var(--gold)"></i>Corrected by hand</span><span><i style="background:var(--badbg);border:1px solid var(--bad)"></i>More than maximum marks</span><span>Use AB (absent), ML (medical leave) or LA (late admission) if needed.</span></div></div>
+      ${cls.co.length ? `<div class="panel"><h3>Co-scholastic area</h3><div class="tw"><table class="mt" style="min-width:420px"><thead><tr><th style="text-align:left;padding-left:8px">Activity</th>${F.terms.map(t => `<th>${esc(t.n)}</th>`).join('')}</tr></thead><tbody>
+      ${cls.co.map(n => `<tr><td class="s">${esc(n)}</td>${F.terms.map(t => `<td><select class="mk" data-co="${esc(n)}" data-ct="${t.k}" ${dis}><option value="">–</option>${F.co.map(([g]) => `<option>${esc(g)}</option>`).join('')}</select></td>`).join('')}</tr>`).join('')}
+      </tbody></table></div><div class="legend">${F.co.map(([g, m]) => `${esc(g)} – ${esc(m)}`).join(' · ')}</div></div>` : ''}
       <div class="panel"><h3>Result</h3><div class="grid">
         <div class="f"><label>Percentage (auto)</label><input id="rp" class="mk auto" readonly tabindex="-1" style="text-align:left"></div>
         <div class="f"><label>Grade (auto)</label><input id="rg" class="mk auto" readonly tabindex="-1" style="text-align:left"></div>
@@ -240,7 +258,7 @@
         if (el.type === 'date' && v) { const [y, m, dd] = v.split('-'); v = `${dd}-${m}-${y}`; }
         o[el.dataset.i] = v;
       });
-      const data = { t1: {}, t2: {}, ov: {}, co: {} };
+      const data = { ov: {}, co: {} }; F.terms.forEach(t => { data[t.k] = {}; });
       $$('[data-t][data-k]').forEach(el => {
         const v = el.value.trim(); if (v === '') return;
         if (el.classList.contains('tot') && el.dataset.ovr !== '1') return;
@@ -253,28 +271,33 @@
     function refresh() {
       const c = collect(), r = RC.calc(c, cls);
       r.rows.forEach(row => {
-        ['t1', 't2'].forEach(t => {
-          const tot = $(`.tot[data-t="${t}"][data-s="${CSS.escape(row.s)}"]`), calcV = t === 't1' ? row.t1c : row.t2c;
-          if (document.activeElement !== tot && tot.dataset.ovr !== '1') tot.value = calcV == null ? '' : RC.fmt(calcV);
+        F.terms.forEach(t => {
+          const x = row.t[t.k];
+          const tot = $(`.tot[data-t="${t.k}"][data-s="${CSS.escape(row.s)}"]`);
+          if (document.activeElement !== tot && tot.dataset.ovr !== '1') tot.value = x.totc == null ? '' : RC.fmt(x.totc);
           tot.classList.toggle('ovr', tot.dataset.ovr === '1'); tot.classList.toggle('auto', tot.dataset.ovr !== '1');
-          const gr = $(`.gr[data-t="${t}"][data-s="${CSS.escape(row.s)}"]`), gc = t === 't1' ? row.g1c : row.g2c;
-          gr.options[0].textContent = gc ? 'Auto · ' + gc : 'Auto';
+          const gr = $(`.gr[data-t="${t.k}"][data-s="${CSS.escape(row.s)}"]`);
+          gr.options[0].textContent = x.gc ? 'Auto · ' + x.gc : 'Auto';
           gr.classList.toggle('ovr', !!gr.value); gr.classList.toggle('auto', !gr.value);
         });
-        $(`[data-ovs="${CSS.escape(row.s)}"]`).value = RC.fmt(row.ov);
-        const go = $(`.gr[data-t="ov"][data-s="${CSS.escape(row.s)}"]`); go.options[0].textContent = row.goc ? 'Auto · ' + row.goc : 'Auto';
-        go.classList.toggle('ovr', !!go.value); go.classList.toggle('auto', !go.value);
+        if (multi) {
+          $(`[data-ovs="${CSS.escape(row.s)}"]`).value = row.ov == null ? '' : RC.fmt(row.ov) + '%';
+          const go = $(`.gr[data-t="ov"][data-s="${CSS.escape(row.s)}"]`); go.options[0].textContent = row.goc ? 'Auto · ' + row.goc : 'Auto';
+          go.classList.toggle('ovr', !!go.value); go.classList.toggle('auto', !go.value);
+        }
       });
       $$('.mk[data-max]').forEach(el => {
         const v = el.value.trim(), n = Number(v);
         el.classList.toggle('bad', v !== '' && !/^(ab|ml|la)$/i.test(v) && (isNaN(n) || n < 0 || n > +el.dataset.max));
       });
       const pct = v => v == null ? '–' : v.toFixed(1) + '%';
-      $('#sum-t1').innerHTML = `<div>Term I total<b>${r.t1Any ? RC.fmt(r.t1) + ' / ' + r.max : '–'}</b></div><div>Term I %<b>${pct(r.p1)}</b></div><div>Term I grade<b>${r.g1 || '–'}</b></div>`;
-      $('#sum-t2').innerHTML = `<div>Term II total<b>${r.t2Any ? RC.fmt(r.t2) + ' / ' + r.max : '–'}</b></div><div>Term II %<b>${pct(r.p2)}</b></div><div>Term II grade<b>${r.g2 || '–'}</b></div>`;
+      F.terms.forEach(t => {
+        const T = r.term[t.k];
+        $('#sum-' + t.k).innerHTML = `<div>${esc(t.n)} total<b>${T.any ? RC.fmt(T.sum) + ' / ' + T.max : '–'}</b></div><div>${esc(t.n)} %<b>${pct(T.p)}</b></div><div>${esc(t.n)} grade<b>${T.g || '–'}</b></div>`;
+      });
       $('#rp').value = pct(r.finalP); $('#rg').value = r.finalG || '–';
       $('#rr').options[0].textContent = r.resultCalc ? 'Auto · ' + r.resultCalc : 'Auto';
-      $('#rrh').textContent = r.po == null ? 'Final result uses the overall marks once both terms are filled.' : '';
+      $('#rrh').textContent = multi && r.po == null ? 'Final result uses the overall marks once all terms are filled.' : '';
     }
     // totals: mark as override when typed
     $$('.tot').forEach(el => {
@@ -283,20 +306,25 @@
       el.addEventListener('input', () => { el.dataset.ovr = el.value.trim() === '' ? '' : '1'; refresh(); });
       el.addEventListener('blur', refresh);
     });
-    main().addEventListener('input', e => { if (!e.target.classList.contains('tot')) refresh(); });
-    main().addEventListener('change', refresh);
+    // listeners live on #main, which outlives this form: remove them once the form is gone
+    const root = main();
+    const onIn = e => { if (!$('#rp')) return off(); if (!e.target.classList.contains('tot')) refresh(); };
+    const onCh = () => { if (!$('#rp')) return off(); refresh(); };
+    const off = () => { root.removeEventListener('input', onIn); root.removeEventListener('change', onCh); };
+    root.addEventListener('input', onIn); root.addEventListener('change', onCh);
     refresh();
 
     function payload(extra) {
       const c = collect();
       // drop auto totals (only keep hand-corrected ones)
       $$('.tot').forEach(el => { const t = c.data[el.dataset.t][el.dataset.s]; if (t && el.dataset.ovr !== '1') delete t.tot; });
-      return Object.assign({ student_name: c.student_name, roll_no: c.roll_no, admission_no: c.admission_no, dob: c.dob, father: c.father, mother: c.mother, mobile: c.mobile, attendance: c.attendance, section: c.section, data: c.data }, extra || {});
+      return Object.assign({ student_name: c.student_name, roll_no: c.roll_no, admission_no: c.admission_no, dob: c.dob, father: c.father, mother: c.mother, mobile: c.mobile, email: c.email, attendance: c.attendance, class_name: card.class_name, section: c.section != null ? c.section : card.section, data: c.data }, extra || {});
     }
     function validate() {
       const c = collect();
       if (!c.student_name) return 'Please enter the student name.';
       if (c.attendance && (isNaN(+c.attendance) || +c.attendance < 0 || +c.attendance > 100)) return 'Attendance must be a percentage between 0 and 100.';
+      if (c.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(c.email)) return 'Please check the email address.';
       if ($$('.mk.bad').length) return 'Some marks are more than the maximum (shown in red). Please correct them.';
       return '';
     }
@@ -374,9 +402,9 @@
   async function adminHome() {
     S.teachers = await api('/teachers');
     main().innerHTML = `<h1 class="pg">Admin panel</h1><p class="sub">Session ${esc(S.settings.session)} · ${S.teachers.length} teacher(s)</p>
-      <div class="tabs">${[['cards', 'Report cards'], ['teachers', 'Teachers'], ['classes', 'Classes & subjects'], ['settings', 'Settings']].map(([k, l]) => `<button class="tab ${adminTab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div><div id="tabc"></div>`;
+      <div class="tabs">${[['cards', 'Report cards'], ['teachers', 'Teachers'], ['classes', 'Classes & report card format'], ['admins', 'Admins'], ['settings', 'Settings']].map(([k, l]) => `<button class="tab ${adminTab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div><div id="tabc"></div>`;
     $$('[data-tab]').forEach(b => b.onclick = () => { adminTab = b.dataset.tab; adminHome(); });
-    ({ cards: adminCards, teachers: adminTeachers, classes: adminClasses, settings: adminSettings })[adminTab]();
+    ({ cards: adminCards, teachers: adminTeachers, classes: adminClasses, admins: adminAdmins, settings: adminSettings })[adminTab]();
   }
 
   async function adminCards() {
@@ -384,7 +412,7 @@
       <select id="fc" class="mk" style="width:auto;min-width:150px"><option value="">All classes</option>${S.classes.map(c => `<option>${esc(c.name)}</option>`).join('')}</select>
       <select id="ft" class="mk" style="width:auto;min-width:160px"><option value="">All teachers</option>${S.teachers.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select>
       <select id="fs" class="mk" style="width:auto"><option value="">Submitted + approved</option><option value="submitted">Waiting for approval</option><option value="approved">Approved</option><option value="draft">Drafts (not submitted)</option></select>
-      <input id="fq" class="mk" style="flex:1;min-width:220px;text-align:left" placeholder="Search by student, mobile, father or mother name…">
+      <input id="fq" class="mk" style="flex:1;min-width:220px;text-align:left" placeholder="Search by student name, mobile, email, admission no., roll no. or parent name…">
       <button class="btn gold" id="bulk" disabled>⬇ Download all shown (PDF)</button></div>
       <div class="tw" id="al"><div class="empty">Loading…</div></div></div>`;
     let rows = [];
@@ -413,70 +441,205 @@
     };
     load();
   }
-  const fallbackCls = c => ({ name: c.class_name, subjects: Object.keys((c.data && c.data.t1) || {}), co: Object.keys((c.data && c.data.co) || {}) });
+  function fallbackCls(c) { const d = c.data || {}; const f = Object.keys(d).find(k => !['ov', 'co', 'result', 'promoted', 'remark'].includes(k)); return { name: c.class_name, subjects: Object.keys((f && d[f]) || {}), co: Object.keys(d.co || {}), format: null }; }
 
+  const tClasses = t => (t.classes || []).map(x => x.c + (x.s ? ' – ' + x.s : '')).join(', ');
   function adminTeachers() {
     $('#tabc').innerHTML = `<div class="panel"><div class="row" style="justify-content:space-between;margin-bottom:12px"><h3 style="margin:0">Teachers</h3><button class="btn gold" id="addt">+ Add teacher</button></div>
-      <div class="tw">${S.teachers.length ? `<table class="lt"><thead><tr><th>Teacher</th><th>Login email</th><th>Class</th><th>Phone</th><th>Report cards</th><th>Status</th><th></th></tr></thead><tbody>${S.teachers.map(t => `<tr>
+      <div class="srch"><input id="tsq" class="mk" placeholder="Search teacher by name, email, phone or class…">
+      <select id="tsc" class="mk" style="width:auto"><option value="">All classes</option>${S.classes.map(c => `<option>${esc(c.name)}</option>`).join('')}</select>
+      <select id="tss" class="mk" style="width:auto"><option value="">Active + disabled</option><option value="1">Active</option><option value="0">Disabled</option></select></div>
+      <div class="tw" id="tlist"></div></div>`;
+    const draw = () => {
+      const q = $('#tsq').value.trim().toLowerCase(), qd = q.replace(/\D/g, ''), fc = $('#tsc').value, fs = $('#tss').value;
+      const rows = S.teachers.filter(t => {
+        if (fc && !(t.classes || []).some(x => x.c === fc)) return false;
+        if (fs !== '' && String(t.active ? 1 : 0) !== fs) return false;
+        if (!q) return true;
+        const hay = [t.name, t.email, t.designation, tClasses(t)].join(' ').toLowerCase();
+        return hay.includes(q) || (qd.length >= 3 && String(t.phone || '').replace(/\D/g, '').includes(qd));
+      });
+      $('#tlist').innerHTML = rows.length ? `<table class="lt"><thead><tr><th>Teacher</th><th>Login email</th><th>Classes</th><th>Phone</th><th>Report cards</th><th>Status</th><th></th></tr></thead><tbody>${rows.map(t => `<tr>
       <td><div class="tch">${avatar(t)}<div><b>${esc(t.name)}</b><br><small style="color:var(--muted)">${esc(t.designation || '')}</small></div></div></td>
-      <td>${esc(t.email)}</td><td>${esc(t.class_name || '–')}${t.section ? ' – ' + esc(t.section) : ''}</td><td>${esc(t.phone)}</td><td>${t.cards}</td>
+      <td>${esc(t.email)}</td><td>${esc(tClasses(t) || '–')}</td><td>${esc(t.phone)}</td><td>${t.cards}</td>
       <td>${t.active ? '<span class="st approved">Active</span>' : '<span class="st draft">Disabled</span>'}</td>
-      <td><div class="row" style="justify-content:flex-end;flex-wrap:nowrap"><button class="btn sm" data-et="${t.id}">Edit</button><button class="btn sm danger" data-dt="${t.id}">Remove</button></div></td></tr>`).join('')}</tbody></table>` : '<div class="empty">No teachers yet. Click “+ Add teacher”.</div>'}</div></div>`;
+      <td><div class="row" style="justify-content:flex-end;flex-wrap:nowrap"><button class="btn sm" data-vt="${t.id}">View</button><button class="btn sm" data-et="${t.id}">Edit</button><button class="btn sm danger" data-dt="${t.id}">Remove</button></div></td></tr>`).join('')}</tbody></table>`
+        : `<div class="empty">${S.teachers.length ? 'No teacher matches your search.' : 'No teachers yet. Click “+ Add teacher”.'}</div>`;
+      $$('[data-vt]').forEach(b => b.onclick = () => teacherDetails(S.teachers.find(t => t.id === +b.dataset.vt)));
+      $$('[data-et]').forEach(b => b.onclick = () => teacherForm(S.teachers.find(t => t.id === +b.dataset.et)));
+      $$('[data-dt]').forEach(b => b.onclick = async () => {
+        const t = S.teachers.find(x => x.id === +b.dataset.dt);
+        if (!confirm(`Remove ${t.name} from the portal? Their report cards will stay saved.`)) return;
+        await api('/teachers/' + t.id, { method: 'DELETE' }); adminHome();
+      });
+    };
     $('#addt').onclick = () => teacherForm(null);
-    $$('[data-et]').forEach(b => b.onclick = () => teacherForm(S.teachers.find(t => t.id === +b.dataset.et)));
-    $$('[data-dt]').forEach(b => b.onclick = async () => {
-      const t = S.teachers.find(x => x.id === +b.dataset.dt);
-      if (!confirm(`Remove ${t.name} from the portal? Their report cards will stay saved.`)) return;
-      await api('/teachers/' + t.id, { method: 'DELETE' }); adminHome();
-    });
+    let tmr; $('#tsq').oninput = () => { clearTimeout(tmr); tmr = setTimeout(draw, 150); };
+    $('#tsc').onchange = draw; $('#tss').onchange = draw;
+    draw();
+  }
+  function teacherDetails(t) {
+    const when = t.created_at ? new Date(t.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '–';
+    const m = modal(`<div class="mh"><h2>${esc(t.name)}</h2><button class="btn" id="dcl">Close</button></div>
+      <div class="det">${t.photo ? `<img class="ph" src="${esc(t.photo)}" alt="">` : `<div class="ph av" style="width:140px;height:160px;display:grid;place-items:center;font-size:2.4rem;border-radius:12px;background:var(--cream)">${esc(initials(t.name))}</div>`}
+      <dl><dt>Designation</dt><dd>${esc(t.designation || 'Teacher')}</dd>
+      <dt>Login email</dt><dd>${esc(t.email)}</dd>
+      <dt>Phone</dt><dd>${t.phone ? `<a href="tel:${esc(t.phone)}">${esc(t.phone)}</a>` : '–'}</dd>
+      <dt>Classes</dt><dd>${esc(tClasses(t) || 'Not assigned')}</dd>
+      <dt>Status</dt><dd>${t.active ? 'Active – can log in' : 'Disabled – cannot log in'}</dd>
+      <dt>Registered on</dt><dd>${esc(when)}</dd>
+      <dt>Report cards</dt><dd>${t.cards} total · ${t.drafts} draft · ${t.submitted} waiting for approval · ${t.approved} approved</dd>
+      <dt>Signature</dt><dd>${t.signature ? `<img src="${esc(t.signature)}" alt="" style="max-height:60px;max-width:220px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:4px">` : 'Not uploaded'}</dd></dl></div>
+      <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn" id="dcards">See report cards</button><button class="btn pri" id="ded">Edit teacher</button></div>`);
+    $('#dcl', m).onclick = closeModal;
+    $('#ded', m).onclick = () => teacherForm(t);
+    $('#dcards', m).onclick = async () => { closeModal(); adminTab = 'cards'; await adminHome(); $('#ft').value = String(t.id); $('#fs').value = ''; $('#ft').dispatchEvent(new Event('change')); };
   }
   function teacherForm(t) {
-    const isNew = !t; t = t || { active: 1 };
+    const isNew = !t; t = t || { active: 1, classes: [] };
+    let rows = (t.classes && t.classes.length ? t.classes : [{ c: '', s: '' }]).map(x => ({ c: x.c, s: x.s || '' }));
     const m = modal(`<div class="mh"><h2>${isNew ? 'Add teacher' : 'Edit teacher'}</h2><button class="btn" id="tcl">Close</button></div>
       <form id="tf" novalidate><div class="grid">
       <div class="f"><label>Full name *</label><input name="name" value="${esc(t.name || '')}"></div>
       <div class="f"><label>Login email *</label><input name="email" type="email" value="${esc(t.email || '')}"><div class="hint">The teacher logs in with a code sent to this email.</div></div>
       <div class="f"><label>Phone</label><input name="phone" type="tel" value="${esc(t.phone || '')}"></div>
-      <div class="f"><label>Class *</label><select name="class_name"><option value="">– Select –</option>${S.classes.map(c => `<option ${c.name === t.class_name ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div>
-      <div class="f"><label>Section</label><input name="section" value="${esc(t.section || '')}" placeholder="A"></div>
       <div class="f"><label>Designation / subject</label><input name="designation" value="${esc(t.designation || '')}" placeholder="Class Teacher · Maths"></div>
       ${!isNew ? `<div class="f"><label>Status</label><select name="active"><option value="1" ${t.active ? 'selected' : ''}>Active</option><option value="0" ${!t.active ? 'selected' : ''}>Disabled (cannot log in)</option></select></div>` : ''}
-      </div><div class="grid" style="margin-top:12px">
+      </div>
+      <div class="f" style="margin-top:12px"><label>Classes this teacher makes report cards for *</label><div id="crows"></div>
+      <button type="button" class="btn sm" id="addcr">+ Add another class</button><div class="hint">A teacher can have more than one class. After logging in, she chooses which class to work on.</div></div>
+      <div class="grid" style="margin-top:12px">
       <div class="f"><label>Photo</label><div class="imgup"><img id="pimg" src="${esc(t.photo || '/assets/img/favicon-32.png')}" alt=""><input type="file" accept="image/*" id="pfile"></div></div>
       <div class="f"><label>Signature (shown on report card)</label><div class="imgup sig"><img id="simg" src="${esc(t.signature || '')}" alt=""><input type="file" accept="image/*" id="sfile"></div><div class="hint">Sign on white paper, take a photo, crop it.</div></div></div>
       <div id="tm"></div><div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn pri">${isNew ? 'Add teacher' : 'Save changes'}</button></div></form>`);
+    const drawRows = () => {
+      $('#crows', m).innerHTML = rows.map((r, i) => `<div class="ac-row"><div class="f" style="min-width:170px"><label style="font-size:.75rem">Class</label><select data-rc="${i}"><option value="">– Select –</option>${S.classes.map(c => `<option ${c.name === r.c ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div>
+        <div class="f" style="width:110px"><label style="font-size:.75rem">Section</label><input data-rs="${i}" value="${esc(r.s)}" placeholder="A"></div>
+        ${rows.length > 1 ? `<button type="button" class="xbtn" data-rx="${i}" title="Remove this class" style="margin-bottom:8px">×</button>` : ''}</div>`).join('');
+      $$('[data-rc]', m).forEach(el => el.onchange = () => rows[+el.dataset.rc].c = el.value);
+      $$('[data-rs]', m).forEach(el => el.oninput = () => rows[+el.dataset.rs].s = el.value.trim());
+      $$('[data-rx]', m).forEach(el => el.onclick = () => { rows.splice(+el.dataset.rx, 1); drawRows(); });
+    };
+    drawRows();
+    $('#addcr', m).onclick = () => { rows.push({ c: '', s: '' }); drawRows(); };
     let photo = t.photo || '', signature = t.signature || '';
     $('#tcl', m).onclick = closeModal;
     $('#pfile', m).onchange = async e => { try { photo = await readImage(e.target.files[0], 320); $('#pimg', m).src = photo; } catch (er) { toast($('#tm', m), er.message); } };
     $('#sfile', m).onchange = async e => { try { signature = await readImage(e.target.files[0], 420); $('#simg', m).src = signature; } catch (er) { toast($('#tm', m), er.message); } };
     $('#tf', m).onsubmit = async e => {
       e.preventDefault(); const f = e.target;
-      if (!f.class_name.value) return toast($('#tm', m), 'Please choose the class for this teacher.');
-      const body = { name: f.name.value, email: f.email.value, phone: f.phone.value, class_name: f.class_name.value, section: f.section.value, designation: f.designation.value, photo, signature };
+      const classes = rows.filter(r => r.c);
+      if (!classes.length) return toast($('#tm', m), 'Please choose at least one class for this teacher.');
+      const body = { name: f.name.value, email: f.email.value, phone: f.phone.value, designation: f.designation.value, classes, photo, signature };
       if (!isNew) body.active = f.active.value === '1';
       try { await api(isNew ? '/teachers' : '/teachers/' + t.id, { method: isNew ? 'POST' : 'PUT', body }); closeModal(); adminHome(); }
       catch (er) { toast($('#tm', m), er.message); }
     };
   }
 
-  function adminClasses() {
-    const list = JSON.parse(JSON.stringify(S.classes));
-    const draw = () => {
-      $('#tabc').innerHTML = `<div class="panel"><div class="row" style="justify-content:space-between;margin-bottom:6px"><h3 style="margin:0">Classes &amp; subjects</h3><div class="row"><button class="btn" id="addc">+ Add class</button><button class="btn pri" id="savec">Save all</button></div></div>
-        <p class="sub">Each class has its own subjects and co-scholastic activities. Teachers see exactly these on their report card form.</p><div id="cm"></div>
-        ${list.map((c, i) => `<div class="clsrow"><div class="row" style="margin-bottom:8px"><div class="f" style="flex:1;min-width:160px"><label>Class name</label><input data-cn="${i}" value="${esc(c.name)}"></div><button class="btn sm danger" data-rc="${i}" style="align-self:end">Remove class</button></div>
-        ${['subjects', 'co'].map(k => `<div class="f" style="margin-top:6px"><label>${k === 'subjects' ? 'Subjects' : 'Co-scholastic activities'}</label><div class="chips">${c[k].map((s, j) => `<span class="chip">${esc(s)}<button type="button" data-x="${i}|${k}|${j}" aria-label="Remove">×</button></span>`).join('')}
-        <input class="mk" style="width:170px;text-align:left" placeholder="+ add & press Enter" data-add="${i}|${k}"></div></div>`).join('')}</div>`).join('')}</div>`;
-      $$('[data-cn]').forEach(el => el.oninput = () => list[+el.dataset.cn].name = el.value);
-      $$('[data-rc]').forEach(b => b.onclick = () => { if (confirm('Remove this class?')) { list.splice(+b.dataset.rc, 1); draw(); } });
-      $$('[data-x]').forEach(b => b.onclick = () => { const [i, k, j] = b.dataset.x.split('|'); list[+i][k].splice(+j, 1); draw(); });
-      $$('[data-add]').forEach(el => el.onkeydown = e => { if (e.key === 'Enter' && el.value.trim()) { e.preventDefault(); const [i, k] = el.dataset.add.split('|'); list[+i][k].push(el.value.trim()); draw(); $(`[data-add="${i}|${k}"]`).focus(); } });
-      $('#addc').onclick = () => { list.push({ name: 'New class', subjects: [], co: [...(list[0] ? list[0].co : [])] }); draw(); };
-      $('#savec').onclick = async () => {
-        try { await api('/classes', { method: 'PUT', body: { classes: list } }); const b = await api('/bootstrap'); S.classes = b.classes; toast($('#cm'), 'Saved ✓', true); }
-        catch (er) { toast($('#cm'), er.message); }
+  // ----- admins -----
+  async function adminAdmins() {
+    const list = await api('/admins');
+    $('#tabc').innerHTML = `<div class="panel"><div class="row" style="justify-content:space-between;margin-bottom:6px"><h3 style="margin:0">Admins</h3><button class="btn gold" id="adda">+ Add admin</button></div>
+      <p class="sub">Every admin has full access: report cards, teachers, classes, formats and settings. New admins log in on this page with a code sent to their email.</p>
+      <div class="tw"><table class="lt"><thead><tr><th>Admin</th><th>Login email</th><th>Phone</th><th>Status</th><th></th></tr></thead><tbody>${list.map(a => `<tr>
+      <td><b>${esc(a.name)}</b>${a.me ? ' <small style="color:var(--muted)">(you)</small>' : ''}<br><small style="color:var(--muted)">${esc(a.designation || '')}</small></td>
+      <td>${esc(a.email)}</td><td>${esc(a.phone || '')}</td><td>${a.active ? '<span class="st approved">Active</span>' : '<span class="st draft">Disabled</span>'}</td>
+      <td><div class="row" style="justify-content:flex-end;flex-wrap:nowrap">${a.me ? '' : `<button class="btn sm" data-ta="${a.id}">${a.active ? 'Disable' : 'Enable'}</button><button class="btn sm danger" data-da="${a.id}">Remove</button>`}</div></td></tr>`).join('')}</tbody></table></div><div id="am"></div></div>`;
+    $('#adda').onclick = () => {
+      const m = modal(`<div class="mh"><h2>Add admin</h2><button class="btn" id="acl">Close</button></div><form id="af" novalidate><div class="grid">
+        <div class="f"><label>Full name *</label><input name="name"></div>
+        <div class="f"><label>Login email *</label><input name="email" type="email"><div class="hint">They log in with a code sent to this email.</div></div>
+        <div class="f"><label>Phone</label><input name="phone" type="tel"></div>
+        <div class="f"><label>Designation</label><input name="designation" placeholder="Principal / Office Admin"></div>
+        <div class="f"><label>Backup password (optional, min 8)</label><input name="password" type="password" autocomplete="new-password"><div class="hint">Only needed if email codes ever stop working.</div></div>
+        </div><div id="afm"></div><div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn pri">Add admin</button></div></form>`);
+      $('#acl', m).onclick = closeModal;
+      $('#af', m).onsubmit = async e => {
+        e.preventDefault(); const f = e.target;
+        try { await api('/admins', { method: 'POST', body: { name: f.name.value, email: f.email.value, phone: f.phone.value, designation: f.designation.value, password: f.password.value } }); closeModal(); adminAdmins(); }
+        catch (er) { toast($('#afm', m), er.message); }
       };
     };
+    $$('[data-ta]').forEach(b => b.onclick = async () => {
+      const a = list.find(x => x.id === +b.dataset.ta);
+      try { await api('/admins/' + a.id, { method: 'PUT', body: { name: a.name, phone: a.phone, designation: a.designation, active: !a.active } }); adminAdmins(); } catch (er) { toast($('#am'), er.message); }
+    });
+    $$('[data-da]').forEach(b => b.onclick = async () => {
+      const a = list.find(x => x.id === +b.dataset.da);
+      if (!confirm(`Remove ${a.name} as admin?`)) return;
+      try { await api('/admins/' + a.id, { method: 'DELETE' }); adminAdmins(); } catch (er) { toast($('#am'), er.message); }
+    });
+  }
+
+  // ----- classes + report card format -----
+  let fmtSel = 0;
+  function adminClasses() {
+    const list = JSON.parse(JSON.stringify(S.classes));
+    list.forEach(c => { if (!c.format) c.format = RC.clone(RC.DEF_FORMAT); });
+    const uid = p => p + Math.random().toString(36).slice(2, 7);
+    const scaleStr = f => f.scale.map(([lo, g]) => `${lo}=${g}`).join(', ');
+    const coStr = f => f.co.map(([g, m]) => `${g}=${m}`).join(', ');
+    const draw = () => {
+      if (fmtSel >= list.length) fmtSel = Math.max(0, list.length - 1);
+      const c = list[fmtSel], f = c && c.format;
+      $('#tabc').innerHTML = `<div class="panel"><div class="row" style="justify-content:space-between;margin-bottom:6px"><h3 style="margin:0">Classes &amp; report card format</h3><div class="row"><button class="btn" id="addc">+ Add class</button><button class="btn pri" id="savec">Save all</button></div></div>
+        <p class="sub">Each class has its own subjects, exam columns, maximum marks, grading and co-scholastic activities. A teacher sees exactly her class’s format on the report card form.</p>
+        <div class="row" style="margin-bottom:12px"><div class="f" style="min-width:220px;margin:0"><label>Choose class to edit</label><select id="csel">${list.map((x, i) => `<option value="${i}" ${i === fmtSel ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div></div>
+        <div id="cm"></div>
+        ${c ? `<div class="clsrow">
+          <div class="row" style="margin-bottom:8px"><div class="f" style="flex:1;min-width:160px"><label>Class name</label><input id="cn" value="${esc(c.name)}"></div>
+          <div class="f" style="min-width:200px"><label>Copy format from</label><select id="cpf"><option value="">– another class –</option>${list.map((x, i) => i === fmtSel ? '' : `<option value="${i}">${esc(x.name)}</option>`).join('')}</select></div>
+          <button class="btn sm danger" id="rmc" style="align-self:end">Remove class</button></div>
+          ${['subjects', 'co'].map(k => `<div class="f" style="margin-top:6px"><label>${k === 'subjects' ? 'Subjects' : 'Co-scholastic activities'}</label><div class="chips">${c[k].map((s, j) => `<span class="chip">${esc(s)}<button type="button" data-x="${k}|${j}" aria-label="Remove">×</button></span>`).join('')}
+          <input class="mk" style="width:170px;text-align:left" placeholder="+ add & press Enter" data-add="${k}"></div></div>`).join('')}
+          <h3 style="margin:16px 0 6px">Exam terms &amp; mark columns</h3>
+          ${f.terms.map((t, ti) => `<div class="fmt-term"><div class="row"><div class="f" style="min-width:180px;margin:0"><label style="font-size:.75rem">Term name</label><input data-tn="${ti}" value="${esc(t.n)}"></div>
+            <div style="align-self:end;color:var(--muted);font-size:.85rem">Total: <b>${t.cols.reduce((a, x) => a + (+x.m || 0), 0)}</b> marks</div>
+            ${f.terms.length > 1 ? `<button type="button" class="btn sm danger" data-tx="${ti}" style="align-self:end;margin-left:auto">Remove term</button>` : ''}</div>
+            <div class="fmt-cols">${t.cols.map((col, ci) => `<div class="fmt-col"><input class="l" data-cl="${ti}|${ci}" value="${esc(col.l)}" placeholder="Column name"><input class="m" data-cm="${ti}|${ci}" value="${col.m}" inputmode="numeric" title="Maximum marks"><button type="button" data-cx="${ti}|${ci}" title="Remove column">×</button></div>`).join('')}
+            <button type="button" class="btn sm" data-ca="${ti}">+ Column</button></div></div>`).join('')}
+          ${f.terms.length < 4 ? '<button type="button" class="btn sm" id="addterm">+ Add term</button>' : ''}
+          <div class="grid" style="margin-top:14px">
+            <div class="f" style="grid-column:span 2"><label>Grading scale (minimum % = grade)</label><input id="fscale" value="${esc(scaleStr(f))}"><div class="hint">Example: 91=A1, 81=A2, 71=B1, 61=B2, 51=C1, 41=C2, 33=D, 0=E</div></div>
+            <div class="f"><label>Pass mark %</label><input id="fpass" value="${esc(f.pass)}" inputmode="numeric"></div>
+            <div class="f" style="grid-column:span 2"><label>Co-scholastic grades (grade = meaning)</label><input id="fco" value="${esc(coStr(f))}"><div class="hint">Example: A=Outstanding, B=Very Good, C=Good, D=Needs Improvement</div></div>
+          </div>
+          <div class="row" style="margin-top:12px"><button type="button" class="btn" id="fprev">👁 Preview blank report card</button></div>
+        </div>` : '<div class="empty">No classes yet.</div>'}</div>`;
+      $('#csel').onchange = e => { fmtSel = +e.target.value; draw(); };
+      $('#addc').onclick = () => { list.push({ name: 'New class', subjects: [], co: [...(list[0] ? list[0].co : [])], format: RC.clone(list[fmtSel] ? list[fmtSel].format : RC.DEF_FORMAT) }); fmtSel = list.length - 1; draw(); };
+      $('#savec').onclick = save;
+      if (!c) return;
+      $('#cn').oninput = e => c.name = e.target.value;
+      $('#cpf').onchange = e => { const src = list[+e.target.value]; if (src && confirm(`Copy the exam terms, columns and grading of ${src.name} to ${c.name}? (Subjects stay the same.)`)) { c.format = RC.clone(src.format); draw(); } };
+      $('#rmc').onclick = () => { if (confirm(`Remove class ${c.name}?`)) { list.splice(fmtSel, 1); draw(); } };
+      $$('[data-x]').forEach(b => b.onclick = () => { const [k, j] = b.dataset.x.split('|'); c[k].splice(+j, 1); draw(); });
+      $$('[data-add]').forEach(el => el.onkeydown = e => { if (e.key === 'Enter' && el.value.trim()) { e.preventDefault(); const k = el.dataset.add; c[k].push(el.value.trim()); draw(); $(`[data-add="${k}"]`).focus(); } });
+      $$('[data-tn]').forEach(el => el.oninput = () => f.terms[+el.dataset.tn].n = el.value);
+      $$('[data-tx]').forEach(el => el.onclick = () => { if (confirm('Remove this term?')) { f.terms.splice(+el.dataset.tx, 1); draw(); } });
+      $$('[data-cl]').forEach(el => el.oninput = () => { const [ti, ci] = el.dataset.cl.split('|'); f.terms[+ti].cols[+ci].l = el.value; });
+      $$('[data-cm]').forEach(el => el.onchange = () => { const [ti, ci] = el.dataset.cm.split('|'); f.terms[+ti].cols[+ci].m = Math.max(0, +el.value || 0); draw(); });
+      $$('[data-cx]').forEach(el => el.onclick = () => { const [ti, ci] = el.dataset.cx.split('|'); f.terms[+ti].cols.splice(+ci, 1); draw(); });
+      $$('[data-ca]').forEach(el => el.onclick = () => { f.terms[+el.dataset.ca].cols.push({ k: uid('c'), l: 'New column', m: 10 }); draw(); });
+      if ($('#addterm')) $('#addterm').onclick = () => { f.terms.push({ k: uid('t'), n: 'Term ' + (f.terms.length + 1), cols: [{ k: uid('c'), l: 'Exam', m: 100 }] }); draw(); };
+      $('#fscale').onchange = e => {
+        const sc = e.target.value.split(',').map(x => x.split('=').map(y => y.trim())).filter(x => x.length === 2 && x[1] && !isNaN(+x[0])).map(([lo, g]) => [+lo, g]);
+        if (sc.length) f.scale = sc.sort((a, b) => b[0] - a[0]); draw();
+      };
+      $('#fpass').onchange = e => { f.pass = Math.max(0, Math.min(100, +e.target.value || 0)); };
+      $('#fco').onchange = e => { const co = e.target.value.split(',').map(x => x.split('=').map(y => y.trim())).filter(x => x[0]).map(([g, m]) => [g, m || '']); if (co.length) f.co = co; draw(); };
+      $('#fprev').onclick = () => preview({ student_name: 'Sample Student', class_name: c.name, section: 'A', session: S.settings.session, data: {} }, c, null, false);
+    };
+    async function save() {
+      for (const c of list) {
+        if (!c.name.trim()) return toast($('#cm'), 'Every class needs a name.');
+        const bad = c.format.terms.find(t => !t.cols.length);
+        if (bad) return toast($('#cm'), `${c.name}: “${bad.n}” has no mark columns.`);
+      }
+      try { await api('/classes', { method: 'PUT', body: { classes: list } }); const b = await api('/bootstrap'); S.classes = b.classes; toast($('#cm'), 'Saved ✓', true); }
+      catch (er) { toast($('#cm'), er.message); }
+    }
     draw();
   }
 
