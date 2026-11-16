@@ -19,6 +19,10 @@ const DEFAULT_CLASSES = [
 ];
 
 const SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS cn_products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, category TEXT DEFAULT '', unit TEXT NOT NULL DEFAULT 'piece', per_bottle INTEGER DEFAULT 0, cost REAL DEFAULT 0, price REAL DEFAULT 0, active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now')))`,
+  `CREATE TABLE IF NOT EXISTS cn_moves (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL, kind TEXT NOT NULL, qty REAL NOT NULL, cost REAL DEFAULT 0, price REAL DEFAULT 0, day TEXT NOT NULL, received INTEGER DEFAULT 0, collection_id INTEGER, note TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now')))`,
+  `CREATE INDEX IF NOT EXISTS idx_cn_moves ON cn_moves(product_id, day)`,
+  `CREATE TABLE IF NOT EXISTS cn_collections (id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT NOT NULL, expected REAL DEFAULT 0, amount REAL DEFAULT 0, note TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now')))`,
   `CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, pass_hash TEXT NOT NULL, salt TEXT NOT NULL, phone TEXT DEFAULT '', class_name TEXT DEFAULT '', section TEXT DEFAULT '', designation TEXT DEFAULT '', photo TEXT DEFAULT '', signature TEXT DEFAULT '', active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now')))`,
   `CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS classes (name TEXT PRIMARY KEY, subjects TEXT NOT NULL, co TEXT NOT NULL, sort INTEGER DEFAULT 0)`,
@@ -404,6 +408,90 @@ async function api(req, env, url) {
       await db.prepare("DELETE FROM users WHERE id=? AND role='admin'").bind(id).run();
       return json({ ok: true });
     }
+  }
+
+  // ----- canteen (main admin only) -----
+  // Products are 'piece' (sold per packet/bottle) or 'glass' (stock in bottles, sold per glass).
+  // Moves: 'in' = stock given to canteen staff (pieces or bottles), 'sold' = pieces or glasses sold.
+  if (p.startsWith('/canteen')) {
+    if (!isOwner) return err('Only the main admin can open the canteen', 403);
+    const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+    const money = v => Math.max(0, Math.round((Number(v) || 0) * 100) / 100);
+    if (p === '/canteen/state' && m === 'GET') {
+      const products = (await db.prepare('SELECT * FROM cn_products ORDER BY active DESC, name').all()).results;
+      const since = clean(url.searchParams.get('since'), 10) || '2000-01-01';
+      const moves = (await db.prepare('SELECT id, product_id, kind, qty, cost, price, day, received, collection_id, note, created_at FROM cn_moves WHERE day >= ? ORDER BY day, id').bind(since).all()).results;
+      const totals = (await db.prepare("SELECT product_id, SUM(CASE WHEN kind='in' THEN qty ELSE 0 END) AS qin, SUM(CASE WHEN kind='sold' THEN qty ELSE 0 END) AS qsold, SUM(CASE WHEN kind='adjust' THEN qty ELSE 0 END) AS qadj FROM cn_moves GROUP BY product_id").all()).results;
+      const pending = (await db.prepare("SELECT id, product_id, qty, price, day FROM cn_moves WHERE kind='sold' AND received=0 ORDER BY day").all()).results;
+      const collections = (await db.prepare('SELECT * FROM cn_collections ORDER BY day DESC, id DESC LIMIT 200').all()).results;
+      return json({ products, moves, totals, pending, collections });
+    }
+    if (p === '/canteen/products' && m === 'POST') {
+      const b = await readBody(req);
+      const name = clean(b.name, 60), unit = b.unit === 'glass' ? 'glass' : 'piece';
+      if (!name) return err('Enter the product name');
+      if (unit === 'glass' && !(+b.per_bottle >= 1)) return err('Enter how many glasses one bottle gives');
+      if (await db.prepare('SELECT id FROM cn_products WHERE lower(name) = lower(?)').bind(name).first()) return err('A product with this name already exists');
+      const r = await db.prepare('INSERT INTO cn_products (name, category, unit, per_bottle, cost, price) VALUES (?,?,?,?,?,?)')
+        .bind(name, clean(b.category, 30), unit, unit === 'glass' ? Math.round(+b.per_bottle) : 0, money(b.cost), money(b.price)).run();
+      return json({ ok: true, id: r.meta.last_row_id });
+    }
+    mt = p.match(/^\/canteen\/products\/(\d+)$/);
+    if (mt && m === 'PUT') {
+      const b = await readBody(req), id = +mt[1];
+      const name = clean(b.name, 60), unit = b.unit === 'glass' ? 'glass' : 'piece';
+      if (!name) return err('Enter the product name');
+      if (unit === 'glass' && !(+b.per_bottle >= 1)) return err('Enter how many glasses one bottle gives');
+      if (await db.prepare('SELECT id FROM cn_products WHERE lower(name) = lower(?) AND id != ?').bind(name, id).first()) return err('A product with this name already exists');
+      await db.prepare('UPDATE cn_products SET name=?, category=?, unit=?, per_bottle=?, cost=?, price=?, active=? WHERE id=?')
+        .bind(name, clean(b.category, 30), unit, unit === 'glass' ? Math.round(+b.per_bottle) : 0, money(b.cost), money(b.price), b.active === false ? 0 : 1, id).run();
+      return json({ ok: true });
+    }
+    if (p === '/canteen/moves' && m === 'POST') {
+      const b = await readBody(req);
+      const list = Array.isArray(b.entries) ? b.entries.slice(0, 300) : [];
+      const st = [];
+      for (const e of list) {
+        const kind = ['in', 'sold', 'adjust'].includes(e.kind) ? e.kind : null, qty = Number(e.qty);
+        if (!kind || !qty || (kind !== 'adjust' && qty < 0) || !DAY_RE.test(String(e.day || ''))) continue;
+        const pr = await db.prepare('SELECT id, cost, price FROM cn_products WHERE id=?').bind(+e.product_id).first();
+        if (!pr) continue;
+        const cost = e.cost != null && e.cost !== '' ? money(e.cost) : pr.cost, price = e.price != null && e.price !== '' ? money(e.price) : pr.price;
+        st.push(db.prepare('INSERT INTO cn_moves (product_id, kind, qty, cost, price, day, received, note) VALUES (?,?,?,?,?,?,?,?)')
+          .bind(pr.id, kind, Math.round(qty * 100) / 100, cost, price, e.day, kind === 'sold' ? 0 : 1, clean(e.note, 120)));
+        // stock arriving at a new price updates the product's current prices
+        if (kind === 'in' && (cost !== pr.cost || price !== pr.price)) st.push(db.prepare('UPDATE cn_products SET cost=?, price=? WHERE id=?').bind(cost, price, pr.id));
+      }
+      if (!st.length) return err('Nothing to save – enter at least one quantity');
+      await db.batch(st);
+      return json({ ok: true, saved: list.length });
+    }
+    mt = p.match(/^\/canteen\/moves\/(\d+)$/);
+    if (mt && m === 'DELETE') {
+      const mv = await db.prepare('SELECT received, kind FROM cn_moves WHERE id=?').bind(+mt[1]).first();
+      if (!mv) return err('Entry not found', 404);
+      if (mv.kind === 'sold' && mv.received) return err('This sale is already marked as received. Undo the payment first.');
+      await db.prepare('DELETE FROM cn_moves WHERE id=?').bind(+mt[1]).run();
+      return json({ ok: true });
+    }
+    if (p === '/canteen/receive' && m === 'POST') {
+      const b = await readBody(req);
+      const upto = DAY_RE.test(String(b.upto || '')) ? b.upto : null;
+      if (!upto) return err('Choose the date');
+      const due = await db.prepare("SELECT COUNT(*) AS n, IFNULL(SUM(qty*price),0) AS amt FROM cn_moves WHERE kind='sold' AND received=0 AND day <= ?").bind(upto).first();
+      if (!due.n) return err('Nothing pending up to this date');
+      const amount = b.amount === '' || b.amount == null ? due.amt : money(b.amount);
+      const r = await db.prepare('INSERT INTO cn_collections (day, expected, amount, note) VALUES (?,?,?,?)').bind(upto, Math.round(due.amt * 100) / 100, amount, clean(b.note, 160)).run();
+      await db.prepare("UPDATE cn_moves SET received=1, collection_id=? WHERE kind='sold' AND received=0 AND day <= ?").bind(r.meta.last_row_id, upto).run();
+      return json({ ok: true });
+    }
+    mt = p.match(/^\/canteen\/collections\/(\d+)$/);
+    if (mt && m === 'DELETE') {
+      await db.prepare('UPDATE cn_moves SET received=0, collection_id=NULL WHERE collection_id=?').bind(+mt[1]).run();
+      await db.prepare('DELETE FROM cn_collections WHERE id=?').bind(+mt[1]).run();
+      return json({ ok: true });
+    }
+    return err('Not found', 404);
   }
 
   // ----- classes & settings (admin) -----

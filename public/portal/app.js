@@ -414,11 +414,11 @@
   let adminTab = 'cards';
   async function adminHome() {
     S.teachers = await api('/teachers');
-    if (adminTab === 'admins' && S.me.role !== 'owner') adminTab = 'cards';
+    if ((adminTab === 'admins' || adminTab === 'canteen') && S.me.role !== 'owner') adminTab = 'cards';
     main().innerHTML = `<h1 class="pg">Admin panel</h1><p class="sub">Session ${esc(S.settings.session)} · ${S.teachers.length} teacher(s)</p>
-      <div class="tabs">${[['cards', 'Report cards'], ['teachers', 'Teachers'], ['classes', 'Classes & report card format'], ...(S.me.role === 'owner' ? [['admins', 'Admins']] : []), ['settings', 'Settings']].map(([k, l]) => `<button class="tab ${adminTab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div><div id="tabc"></div>`;
+      <div class="tabs">${[['cards', 'Report cards'], ['teachers', 'Teachers'], ['classes', 'Classes & report card format'], ...(S.me.role === 'owner' ? [['canteen', 'Canteen'], ['admins', 'Admins']] : []), ['settings', 'Settings']].map(([k, l]) => `<button class="tab ${adminTab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div><div id="tabc"></div>`;
     $$('[data-tab]').forEach(b => b.onclick = () => { adminTab = b.dataset.tab; adminHome(); });
-    ({ cards: adminCards, teachers: adminTeachers, classes: adminClasses, admins: adminAdmins, settings: adminSettings })[adminTab]();
+    ({ cards: adminCards, teachers: adminTeachers, classes: adminClasses, admins: adminAdmins, settings: adminSettings, canteen: () => window.Canteen.render($('#tabc'), { api, esc, toast, modal, closeModal, $, $$ }) })[adminTab]();
   }
 
   async function adminCards() {
