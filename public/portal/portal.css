@@ -224,3 +224,7 @@ select.mk{padding:6px 2px}
 .cn-bar .v{color:var(--muted);white-space:nowrap;font-size:.85rem}
 @media (max-width:640px){.cn-bar{grid-template-columns:1fr auto}.cn-bar .b{grid-column:1/-1;order:3}.cn-sub{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}.cn-sub button{flex:0 0 auto}
   table.lt td input.cn-in{width:70px}}
+.cn-alert{background:#fff4e0;border:1.5px solid #f0b54a;border-radius:14px;padding:12px 14px;margin:0 0 14px;line-height:1.7}
+.cn-alert a{color:#9a5b00;font-weight:600}
+tr.cn-sum td{background:var(--cream)}
+.cn-bill{border:2px solid var(--gold)}

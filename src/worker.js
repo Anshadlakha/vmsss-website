@@ -22,6 +22,8 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS cn_products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, category TEXT DEFAULT '', unit TEXT NOT NULL DEFAULT 'piece', per_bottle INTEGER DEFAULT 0, cost REAL DEFAULT 0, price REAL DEFAULT 0, active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now')))`,
   `CREATE TABLE IF NOT EXISTS cn_moves (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL, kind TEXT NOT NULL, qty REAL NOT NULL, cost REAL DEFAULT 0, price REAL DEFAULT 0, day TEXT NOT NULL, received INTEGER DEFAULT 0, collection_id INTEGER, note TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now')))`,
   `CREATE INDEX IF NOT EXISTS idx_cn_moves ON cn_moves(product_id, day)`,
+  `CREATE TABLE IF NOT EXISTS cn_payments (id INTEGER PRIMARY KEY AUTOINCREMENT, bill_day TEXT NOT NULL, kind TEXT NOT NULL, amount REAL NOT NULL, person TEXT DEFAULT '', note TEXT DEFAULT '', paid_day TEXT, paid_mode TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now')))`,
+  `CREATE INDEX IF NOT EXISTS idx_cn_pay ON cn_payments(bill_day)`,
   `CREATE TABLE IF NOT EXISTS cn_collections (id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT NOT NULL, expected REAL DEFAULT 0, amount REAL DEFAULT 0, note TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now')))`,
   `CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, pass_hash TEXT NOT NULL, salt TEXT NOT NULL, phone TEXT DEFAULT '', class_name TEXT DEFAULT '', section TEXT DEFAULT '', designation TEXT DEFAULT '', photo TEXT DEFAULT '', signature TEXT DEFAULT '', active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now')))`,
   `CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires INTEGER NOT NULL)`,
@@ -422,29 +424,30 @@ async function api(req, env, url) {
       const since = clean(url.searchParams.get('since'), 10) || '2000-01-01';
       const moves = (await db.prepare('SELECT id, product_id, kind, qty, cost, price, day, received, collection_id, note, created_at FROM cn_moves WHERE day >= ? ORDER BY day, id').bind(since).all()).results;
       const totals = (await db.prepare("SELECT product_id, SUM(CASE WHEN kind='in' THEN qty ELSE 0 END) AS qin, SUM(CASE WHEN kind='sold' THEN qty ELSE 0 END) AS qsold, SUM(CASE WHEN kind='adjust' THEN qty ELSE 0 END) AS qadj FROM cn_moves GROUP BY product_id").all()).results;
-      const pending = (await db.prepare("SELECT id, product_id, qty, price, day FROM cn_moves WHERE kind='sold' AND received=0 ORDER BY day").all()).results;
-      const collections = (await db.prepare('SELECT * FROM cn_collections ORDER BY day DESC, id DESC LIMIT 200').all()).results;
-      return json({ products, moves, totals, pending, collections });
+      const payments = (await db.prepare('SELECT * FROM cn_payments ORDER BY bill_day, id').all()).results;
+      return json({ products, moves, totals, payments });
     }
     if (p === '/canteen/products' && m === 'POST') {
       const b = await readBody(req);
-      const name = clean(b.name, 60), unit = b.unit === 'glass' ? 'glass' : 'piece';
+      const name = clean(b.name, 60), unit = ['glass', 'plate'].includes(b.unit) ? b.unit : 'piece';
       if (!name) return err('Enter the product name');
       if (unit === 'glass' && !(+b.per_bottle >= 1)) return err('Enter how many glasses one bottle gives');
+      if (unit === 'plate' && !(+b.per_bottle >= 1)) return err('Enter how many pieces are in one plate');
       if (await db.prepare('SELECT id FROM cn_products WHERE lower(name) = lower(?)').bind(name).first()) return err('A product with this name already exists');
       const r = await db.prepare('INSERT INTO cn_products (name, category, unit, per_bottle, cost, price) VALUES (?,?,?,?,?,?)')
-        .bind(name, clean(b.category, 30), unit, unit === 'glass' ? Math.round(+b.per_bottle) : 0, money(b.cost), money(b.price)).run();
+        .bind(name, clean(b.category, 30), unit, unit !== 'piece' ? Math.round(+b.per_bottle) : 0, money(b.cost), money(b.price)).run();
       return json({ ok: true, id: r.meta.last_row_id });
     }
     mt = p.match(/^\/canteen\/products\/(\d+)$/);
     if (mt && m === 'PUT') {
       const b = await readBody(req), id = +mt[1];
-      const name = clean(b.name, 60), unit = b.unit === 'glass' ? 'glass' : 'piece';
+      const name = clean(b.name, 60), unit = ['glass', 'plate'].includes(b.unit) ? b.unit : 'piece';
       if (!name) return err('Enter the product name');
       if (unit === 'glass' && !(+b.per_bottle >= 1)) return err('Enter how many glasses one bottle gives');
+      if (unit === 'plate' && !(+b.per_bottle >= 1)) return err('Enter how many pieces are in one plate');
       if (await db.prepare('SELECT id FROM cn_products WHERE lower(name) = lower(?) AND id != ?').bind(name, id).first()) return err('A product with this name already exists');
       await db.prepare('UPDATE cn_products SET name=?, category=?, unit=?, per_bottle=?, cost=?, price=?, active=? WHERE id=?')
-        .bind(name, clean(b.category, 30), unit, unit === 'glass' ? Math.round(+b.per_bottle) : 0, money(b.cost), money(b.price), b.active === false ? 0 : 1, id).run();
+        .bind(name, clean(b.category, 30), unit, unit !== 'piece' ? Math.round(+b.per_bottle) : 0, money(b.cost), money(b.price), b.active === false ? 0 : 1, id).run();
       return json({ ok: true });
     }
     if (p === '/canteen/moves' && m === 'POST') {
@@ -470,26 +473,40 @@ async function api(req, env, url) {
     if (mt && m === 'DELETE') {
       const mv = await db.prepare('SELECT received, kind FROM cn_moves WHERE id=?').bind(+mt[1]).first();
       if (!mv) return err('Entry not found', 404);
-      if (mv.kind === 'sold' && mv.received) return err('This sale is already marked as received. Undo the payment first.');
       await db.prepare('DELETE FROM cn_moves WHERE id=?').bind(+mt[1]).run();
       return json({ ok: true });
     }
-    if (p === '/canteen/receive' && m === 'POST') {
+    // daily bill payments: UPI, cash, and items taken on credit by a named person
+    if (p === '/canteen/payments' && m === 'POST') {
       const b = await readBody(req);
-      const upto = DAY_RE.test(String(b.upto || '')) ? b.upto : null;
-      if (!upto) return err('Choose the date');
-      const due = await db.prepare("SELECT COUNT(*) AS n, IFNULL(SUM(qty*price),0) AS amt FROM cn_moves WHERE kind='sold' AND received=0 AND day <= ?").bind(upto).first();
-      if (!due.n) return err('Nothing pending up to this date');
-      const amount = b.amount === '' || b.amount == null ? due.amt : money(b.amount);
-      const r = await db.prepare('INSERT INTO cn_collections (day, expected, amount, note) VALUES (?,?,?,?)').bind(upto, Math.round(due.amt * 100) / 100, amount, clean(b.note, 160)).run();
-      await db.prepare("UPDATE cn_moves SET received=1, collection_id=? WHERE kind='sold' AND received=0 AND day <= ?").bind(r.meta.last_row_id, upto).run();
+      if (!DAY_RE.test(String(b.bill_day || ''))) return err('Choose the bill date');
+      const st = [], note = clean(b.note, 160), pday = DAY_RE.test(String(b.day || '')) ? b.day : null;
+      if (money(b.upi)) st.push(db.prepare("INSERT INTO cn_payments (bill_day, kind, amount, note, paid_day) VALUES (?, 'upi', ?, ?, ?)").bind(b.bill_day, money(b.upi), note, pday || b.bill_day));
+      if (money(b.cash)) st.push(db.prepare("INSERT INTO cn_payments (bill_day, kind, amount, note, paid_day) VALUES (?, 'cash', ?, ?, ?)").bind(b.bill_day, money(b.cash), note, pday || b.bill_day));
+      for (const c of (Array.isArray(b.credits) ? b.credits : []).slice(0, 30)) {
+        const person = clean(c && c.person, 60), amt = money(c && c.amount);
+        if (!amt) continue;
+        if (!person) return err('Enter the name of the person who took items on credit');
+        st.push(db.prepare("INSERT INTO cn_payments (bill_day, kind, amount, person, note) VALUES (?, 'credit', ?, ?, ?)").bind(b.bill_day, amt, person, note));
+      }
+      if (!st.length) return err('Enter the UPI, cash or credit amount');
+      await db.batch(st);
       return json({ ok: true });
     }
-    mt = p.match(/^\/canteen\/collections\/(\d+)$/);
-    if (mt && m === 'DELETE') {
-      await db.prepare('UPDATE cn_moves SET received=0, collection_id=NULL WHERE collection_id=?').bind(+mt[1]).run();
-      await db.prepare('DELETE FROM cn_collections WHERE id=?').bind(+mt[1]).run();
-      return json({ ok: true });
+    mt = p.match(/^\/canteen\/payments\/(\d+)(\/paid)?$/);
+    if (mt) {
+      const pay = await db.prepare('SELECT * FROM cn_payments WHERE id=?').bind(+mt[1]).first();
+      if (!pay) return err('Entry not found', 404);
+      if (mt[2] && m === 'POST') {   // a person paid back their credit
+        if (pay.kind !== 'credit') return err('Only credit entries can be marked as paid');
+        const b = await readBody(req);
+        const mode = b.mode === 'upi' ? 'upi' : 'cash', day = DAY_RE.test(String(b.day || '')) ? b.day : null;
+        if (!day) return err('Choose the date');
+        await db.prepare('UPDATE cn_payments SET paid_day=?, paid_mode=? WHERE id=?').bind(day, mode, pay.id).run();
+        return json({ ok: true });
+      }
+      if (mt[2] && m === 'DELETE') { await db.prepare("UPDATE cn_payments SET paid_day=NULL, paid_mode='' WHERE id=?").bind(pay.id).run(); return json({ ok: true }); }
+      if (!mt[2] && m === 'DELETE') { await db.prepare('DELETE FROM cn_payments WHERE id=?').bind(pay.id).run(); return json({ ok: true }); }
     }
     return err('Not found', 404);
   }
