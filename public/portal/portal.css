@@ -190,3 +190,20 @@ select.mk{padding:6px 2px}
 .seg button{flex:1;border:0;background:transparent;padding:9px;border-radius:9px;font:inherit;font-weight:600;color:var(--muted);cursor:pointer}
 .seg button.on{background:#fff;color:var(--navy);box-shadow:0 1px 4px rgba(0,0,0,.1)}
 .pwv{font-family:ui-monospace,monospace}
+@media (max-width:640px){
+  .tw:has(table.lt){overflow:visible}
+  table.lt,table.lt tbody{display:block;min-width:0!important;width:100%}
+  table.lt thead{display:none}
+  table.lt tr{display:block;background:#fff;border:1px solid var(--line);border-radius:14px;padding:10px 12px;margin:0 0 10px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+  table.lt td{display:flex;gap:10px;justify-content:space-between;align-items:center;border:0!important;padding:5px 0!important;text-align:right;white-space:normal}
+  table.lt td::before{content:attr(data-l);font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-align:left;flex:0 0 auto}
+  table.lt td[data-l=""]::before{content:none}
+  table.lt td:first-child{display:block;text-align:left;font-size:1.02rem;padding-bottom:8px!important;border-bottom:1px dashed var(--line)!important;margin-bottom:4px}
+  table.lt td:first-child::before{content:none}
+  table.lt td:last-child{justify-content:flex-end;padding-top:8px!important}
+  table.lt td:last-child .row{flex-wrap:wrap!important;justify-content:flex-end}
+  .tabs{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px;scrollbar-width:none}
+  .tabs .tab{flex:0 0 auto}
+  .srch input{flex-basis:100%}
+  .srch select{flex:1}
+}

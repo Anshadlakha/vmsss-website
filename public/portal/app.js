@@ -13,6 +13,12 @@
     if (!r.ok) { const e = new Error(d.error || ('Error ' + r.status)); e.status = r.status; throw e; }
     return d;
   }
+  // phones: list tables become stacked cards; each cell gets its column name as a label
+  const labelTables = () => $$('table.lt').forEach(t => {
+    const hs = [...t.querySelectorAll('thead th')].map(th => th.textContent.trim());
+    t.querySelectorAll('tbody tr').forEach(tr => [...tr.children].forEach((td, i) => { if (!td.hasAttribute('data-l')) td.setAttribute('data-l', hs[i] || ''); }));
+  });
+  new MutationObserver(labelTables).observe(document.getElementById('app'), { childList: true, subtree: true });
   const isAdminRole = r => r === 'owner' || r === 'admin';
   const clsOf = name => S.classes.find(c => c.name === name);
   const initials = n => (n || '?').split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();
